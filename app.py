@@ -1,19 +1,20 @@
 import os
+import google.generativeai as genai
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
-import google.generativeai as genai
 
 app = Flask(__name__)
 
-# 1. 從環境變數讀取金鑰與設定
-line_bot_api = LineBotApi(os.getenv('LINE_ACCESS_TOKEN'))
-handler = WebhookHandler(os.getenv('LINE_SECRET'))
-genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+# 確保從環境變數正確讀取，若讀不到會直接報錯在 Logs
+LINE_ACCESS_TOKEN = os.environ.get('LINE_ACCESS_TOKEN')
+LINE_SECRET = os.environ.get('LINE_SECRET')
+GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 
-# 2. 設定系統角色（IT 工程師）
-SYSTEM_PROMPT = "你是一位資深 IT 工程師，專精於伺服器、硬體故障、RAID 配置與 NVR 監控系統。請針對用戶提供的文字或圖片內容，給出專業、簡潔且具備操作性的診斷建議。"
+line_bot_api = LineBotApi(LINE_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_SECRET)
+genai.configure(api_key=GEMINI_KEY)
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -25,32 +26,18 @@ def callback():
         abort(400)
     return 'OK'
 
-# 3. 處理文字訊息
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    # 使用完整的模型路徑以避免 404 錯誤
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    response = model.generate_content([SYSTEM_PROMPT, event.message.text])
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response.text))
+    try:
+        # 這裡改用最通用的模型名稱格式
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(f"你是一位IT工程師，請簡短回覆：{event.message.text}")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response.text))
+    except Exception as e:
+        # 這行超重要：如果出錯，會把具體錯誤字串印在 Render Logs 裡
+        print(f"Gemini Error: {e}")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="抱歉，我現在遇到一點技術問題，請稍後再試。"))
 
-# 4. 處理圖片訊息 (診斷故障畫面)
-@handler.add(MessageEvent, message=ImageMessage)
-def handle_image(event):
-    # 取得圖片數據
-    message_content = line_bot_api.get_message_content(event.message.id)
-    image_data = b""
-    for chunk in message_content.iter_content():
-        image_data += chunk
-    
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    # 送出圖片與系統指令給 Gemini
-    response = model.generate_content([
-        SYSTEM_PROMPT,
-        {"mime_type": "image/jpeg", "data": image_data}
-    ])
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response.text))
-
-# 5. 啟動服務 (確保縮排正確)
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
