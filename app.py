@@ -16,22 +16,27 @@ line_bot_api = LineBotApi(LINE_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_SECRET)
 genai.configure(api_key=GEMINI_KEY)
 
-# --- 2. 系統人設與自動語言邏輯 ---
-SYSTEM_PROMPT = """你是一位資深 IT 工程師，專精於伺服器、硬體故障與網路架構。
-請根據用戶輸入問題的語言進行回覆（例如：用戶用繁體中文提問，你就用繁體中文回覆；用戶用英文提問，你就用英文回覆）。
-語氣要專業且簡潔，針對文字或圖片給予精確的診斷建議。"""
+# --- 2. 終極人設設定：io-bot (NVR / RAID / Nx / EZ Pro) ---
+SYSTEM_PROMPT = """你是 io-bot。
+你的專業領域包含：
+- NVR 伺服器硬體故障診斷與 RAID 磁碟陣列問題。
+- 監控管理軟體：精通 Nx Witness (Network Optix) 與 EZ Pro 的設定與排錯。
+- 網路監控架構、IP 攝影機連接與錄影儲存優化。
 
-# --- 3. 動態尋找可用模型 ---
+指令要求：
+1. 根據用戶語言（中/英）自動切換回覆。
+2. 語氣專業、簡潔且具備解決問題的導向。
+3. 當用戶詢問身分時，請以 io-bot 自稱並列出上述專長。"""
+
+# --- 3. 對話記憶存儲 (Session Management) ---
+chat_sessions = {}
+
 def get_available_model():
     try:
         for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                if 'gemini-1.5-flash' in m.name:
-                    return m.name
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        return available_models[0] if available_models else 'models/gemini-1.5-flash'
-    except:
+            if 'gemini-1.5-flash' in m.name: return m.name
         return 'models/gemini-1.5-flash'
+    except: return 'models/gemini-1.5-flash'
 
 SELECTED_MODEL = get_available_model()
 
@@ -47,25 +52,40 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
+    user_id = event.source.user_id
     try:
-        model = genai.GenerativeModel(SELECTED_MODEL)
-        # 同時傳送系統指令與用戶文字
-        response = model.generate_content([SYSTEM_PROMPT, event.message.text])
+        # 建立或取得連續對話 Session
+        if user_id not in chat_sessions:
+            model = genai.GenerativeModel(
+                model_name=SELECTED_MODEL,
+                system_instruction=SYSTEM_PROMPT
+            )
+            chat_sessions[user_id] = model.start_chat(history=[])
+        
+        chat = chat_sessions[user_id]
+        response = chat.send_message(event.message.text)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response.text))
     except Exception as e:
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"錯誤：{str(e)[:100]}"))
+        print(f"Chat Error: {e}")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="io-bot 暫時無法連線，請稍後再試。"))
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
+    user_id = event.source.user_id
     try:
         message_content = line_bot_api.get_message_content(event.message.id)
         image_data = b"".join([chunk for chunk in message_content.iter_content()])
         
+        # 圖片分析使用 GenerativeModel
         model = genai.GenerativeModel(SELECTED_MODEL)
         response = model.generate_content([
             SYSTEM_PROMPT,
             {"mime_type": "image/jpeg", "data": image_data}
         ])
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response.text))
-    except Exception as e:
-        line_bot_api
+        
+        # 將圖片診斷脈絡同步回對話紀錄，方便後續追蹤詢問
+        if user_id in chat_sessions:
+            chat_sessions[user_id].history.append({"role": "user", "parts": ["（用戶傳送了一張診斷圖片）"]})
+            chat_sessions[user_id].history.append({"role": "model", "parts": [response.text]})
+
+        line_
