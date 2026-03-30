@@ -22,33 +22,18 @@ genai.configure(api_key=GEMINI_KEY)
 SYSTEM_PROMPT = """你是 io-bot。
 你的專業領域包含：
 - NVR 伺服器硬體故障診斷與 RAID 磁碟陣列問題。
-- 監控管理軟體：精通 Nx Witness 與 EZ Pro 的設定與排錯。
+- 監控管理軟體：精通 Nx Witness (Network Optix) 與 EZ Pro 的設定與排錯。
 - 網路監控架構、IP 攝影機連接與錄影儲存優化。
 
 指令要求：
 1. 根據用戶語言（中/英）自動切換回覆，保持專業且簡潔。
 2. 當用戶詢問身分時，請以 io-bot 自稱並簡述上述專長。"""
 
-# --- 4. 自動偵測模型名稱 (核心修復邏輯) ---
-def get_real_model_name():
-    try:
-        # 列出所有可用的模型，找到包含 gemini-1.5-flash 的正確路徑
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                if 'gemini-1.5-flash' in m.name:
-                    print(f"DEBUG: Found model path -> {m.name}")
-                    return m.name
-        # 如果沒找到，回傳一個最可能的預設路徑
-        return 'models/gemini-1.5-flash'
-    except Exception as e:
-        print(f"DEBUG: List models failed: {e}")
-        return 'models/gemini-1.5-flash'
-
-# 儲存正確的模型路徑
-ACTUAL_MODEL_PATH = get_real_model_name()
-
-# --- 5. 對話紀錄暫存 ---
+# --- 4. 對話紀錄暫存 (Session Management) ---
 chat_sessions = {}
+
+# 強制指定最穩定的模型路徑
+ACTUAL_MODEL_PATH = 'models/gemini-1.5-flash'
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -65,7 +50,7 @@ def handle_message(event):
     user_id = event.source.user_id
     try:
         if user_id not in chat_sessions:
-            # 使用自動偵測到的路徑初始化
+            # 這裡使用完整的路徑與 system_instruction
             model = genai.GenerativeModel(
                 model_name=ACTUAL_MODEL_PATH,
                 system_instruction=SYSTEM_PROMPT
@@ -77,7 +62,13 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response.text))
     except Exception as e:
         print(f"Chat Error: {e}")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"io-bot 連線異常，請確認 API Key 狀態。"))
+        # 如果對話模式出錯，嘗試用單次生成模式救援
+        try:
+            model = genai.GenerativeModel(ACTUAL_MODEL_PATH)
+            res = model.generate_content(f"{SYSTEM_PROMPT}\n\nUser: {event.message.text}")
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res.text))
+        except:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="io-bot 目前連線異常，請檢查 API 設定。"))
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
@@ -86,12 +77,13 @@ def handle_image(event):
         message_content = line_bot_api.get_message_content(event.message.id)
         image_data = b"".join([chunk for chunk in message_content.iter_content()])
         
-        model = genai.GenerativeModel(model_name=ACTUAL_MODEL_PATH)
+        model = genai.GenerativeModel(ACTUAL_MODEL_PATH)
         response = model.generate_content([
             SYSTEM_PROMPT,
             {"mime_type": "image/jpeg", "data": image_data}
         ])
         
+        # 同步到對話紀錄
         if user_id in chat_sessions:
             chat_sessions[user_id].history.append({"role": "user", "parts": ["（用戶傳送了診斷圖片）"]})
             chat_sessions[user_id].history.append({"role": "model", "parts": [response.text]})
