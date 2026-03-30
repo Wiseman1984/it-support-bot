@@ -1,5 +1,4 @@
 import os
-import base64
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -15,7 +14,7 @@ genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
 SYSTEM_PROMPT = "你是一位資深 IT 工程師，專精於 NVR 監控、伺服器、RAID 障礙排除。請針對用戶提供的文字或圖片，給出專業、簡潔的診斷建議。"
 
-@app.route("/callback", method=['POST'])
+@app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
