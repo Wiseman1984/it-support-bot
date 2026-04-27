@@ -4,18 +4,21 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import google.generativeai as genai
+from google.generativeai import client  # 導入底層客戶端進行強制設定
 
 app = Flask(__name__)
 
-# 1. 讀取變數 (維持您 Render 上的設定名稱)
+# 1. 讀取環境變數
 line_bot_api = LineBotApi(os.getenv('LINE_ACCESS_TOKEN'))
 handler = WebhookHandler(os.getenv('LINE_SECRET'))
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
-# 2. 修正後的初始化方式 (移除引發報錯的 api_version 參數)
+# 2. 強制 Gemini 走 v1 正式版路徑 (避開 v1beta 404 報錯)
+# 這裡使用底層設置，不會引發之前的 ValueError
 genai.configure(api_key=GEMINI_KEY, transport='rest')
+gemini_client = client.get_default_generative_client()
+gemini_client.api_version = 'v1' 
 
-# 直接指定模型，讓 SDK 根據 API Key 的付費身分自動判斷路徑
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 @app.route("/callback", methods=['POST'])
@@ -31,19 +34,13 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_msg = event.message.text
-    
     try:
-        # 呼叫 Gemini
+        # 呼叫 Gemini 生成內容
         response = model.generate_content(user_msg)
-        
-        if response.text:
-            reply_text = response.text
-        else:
-            reply_text = "機器人目前回應為空，請試著換個問題。"
-            
+        reply_text = response.text if response.text else "目前無法回應。"
     except Exception as e:
-        error_msg = str(e)
-        print(f"Gemini API Error: {error_msg}")
+        print(f"Gemini API Error: {str(e)}")
+        # 這是您在 LINE 上會看到的提示
         reply_text = "io bot 權限同步中，請過 10 秒後再嘗試一次。"
 
     line_bot_api.reply_message(
