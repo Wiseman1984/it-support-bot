@@ -1,37 +1,23 @@
 import os
-import google.generativeai as genai
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
+import google.generativeai as genai
 
 app = Flask(__name__)
 
-# 1. 取得環境變數 (請確認 Render 後台環境變數名稱與此一致)
-LINE_ACCESS_TOKEN = os.environ.get('LINE_ACCESS_TOKEN')
-LINE_SECRET = os.environ.get('LINE_SECRET')
-GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
+# 1. 設定您的環境變數 (請確保 Render 的 Environment Variables 已設定這些 Key)
+line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
+handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
+GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
-line_bot_api = LineBotApi(LINE_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_SECRET)
+# 2. 初始化 Gemini 設定
+# 強制指定使用 REST 傳輸模式，這能有效解決某些環境下 SDK 誤判 API 版本的問題
+genai.configure(api_key=GEMINI_KEY, transport='rest')
 
-# 2. 配置 Gemini (強制使用正式穩定版連線)
-genai.configure(api_key=GEMINI_KEY)
-
-# 初始化模型：型號名稱確定為 'gemini-1.5-flash'
-model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
-    system_instruction=(
-        "你是 io-bot。專業領域：\n"
-        "1. NVR 硬體故障排除 (SATA 線、電源、硬碟)。\n"
-        "2. RAID 陣列狀態管理。\n"
-        "3. Nx Witness 與 EZ Pro 監控軟體相關設定。\n"
-        "請保持專業、簡潔且有條理的回答。"
-    )
-)
-
-# 儲存對話 Session (簡單快取)
-chat_sessions = {}
+# 初始化模型 (不要在名稱前加上 models/，新版 SDK 會自動處理)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -43,37 +29,40 @@ def callback():
         abort(400)
     return 'OK'
 
+@app.event_log = [] # 簡單的日誌記錄
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_id = event.source.user_id
-    user_input = event.message.text.strip()
-
-    # 提供手動重置對話指令
-    if user_input == "重設":
-        if user_id in chat_sessions:
-            del chat_sessions[user_id]
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="[系統] 對話紀錄已清除。"))
-        return
-
-    # 若無 Session 則初始化
-    if user_id not in chat_sessions:
-        chat_sessions[user_id] = model.start_chat(history=[])
+    user_msg = event.message.text
     
     try:
-        # 發送訊息至 Gemini 伺服器
-        response = chat_sessions[user_id].send_message(user_input)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response.text))
+        # 呼叫 Gemini API 生成內容
+        response = model.generate_content(user_msg)
+        
+        if response.text:
+            reply_text = response.text
+        else:
+            reply_text = "機器人現在無法生成文字，請稍後再試。"
+            
     except Exception as e:
-        print(f"Gemini API Error: {e}")
-        # 發生錯誤時重置該用戶 session，以便下次重新對接
-        if user_id in chat_sessions:
-            del chat_sessions[user_id]
-        line_bot_api.reply_message(
-            event.reply_token, 
-            TextSendMessage(text="[io-bot] 正在同步付費權限，請稍候 10 秒後再試一次。")
-        )
+        # 將錯誤詳細資訊印在 Render 日誌中方便排查
+        error_msg = str(e)
+        print(f"--- Gemini API Error Details ---")
+        print(error_msg)
+        
+        # 針對常見的 404/v1beta 錯誤提供友善提示
+        if "404" in error_msg or "v1beta" in error_msg:
+            reply_text = "系統偵測到環境版本衝突，請確保 requirements.txt 已更新並選擇 'Clear Build Cache' 重新部署。"
+        else:
+            reply_text = f"連線暫時異常，請稍後再試一次。\n(錯誤代碼: {error_msg[:20]}...)"
+
+    # 回傳訊息給 LINE 使用者
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=reply_text)
+    )
 
 if __name__ == "__main__":
-    # Render 會自動提供 PORT 環境變數
-    port = int(os.environ.get('PORT', 5000))
+    # Render 會自動分配 port，本地測試預設使用 10000
+    port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
