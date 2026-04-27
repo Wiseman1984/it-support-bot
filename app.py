@@ -1,5 +1,6 @@
 import os
 import io
+import time
 import traceback
 
 from flask import Flask, request, abort
@@ -65,7 +66,18 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 
 
 # =========================
-# 5. Common Prompt
+# 5. Temporary image memory
+# =========================
+# 用來暫存使用者最近上傳的圖片
+# Render 若重啟，這個記憶會消失，這是正常的
+LAST_IMAGE_CACHE = {}
+
+# 圖片保留時間，單位秒
+IMAGE_CACHE_TTL_SECONDS = 30 * 60
+
+
+# =========================
+# 6. Common Prompt
 # =========================
 SYSTEM_PROMPT = """
 你是 io-bot，一個公司內部與客戶現場使用的 IT / FAE 技術支援 LINE Bot。
@@ -86,7 +98,7 @@ SYSTEM_PROMPT = """
 
 3. NVR 主機簡易障礙排除
    - 軟體層：服務未啟動、錄影異常、登入異常、網路連線異常、資料庫異常
-   - 硬體層：硬碟、RAID 卡、網卡、電源、記憶體、CPU、風扇、溫度、BIOS/UEFI 開機異常
+   - 硬體層：硬碟、RAID 卡、網卡、電源、記憶體、CPU、風扇、溫度、BIOS/UEFI 開機異常、Windows 安裝或格式化異常
 
 回答規則：
 - 每次回覆開頭都要使用：「您好，我是 io-bot。」
@@ -94,6 +106,7 @@ SYSTEM_PROMPT = """
 - 回答要簡潔、清楚、可執行。
 - 優先提供現場可操作的排查步驟。
 - 如果使用者提供的是圖片，請先根據圖片判斷可能問題，再提供排查建議。
+- 如果使用者先傳圖片、後續又用文字追問，請同時參考上一張圖片與這次文字。
 - 如果圖片內容不清楚，請明確請使用者補拍較清楚的畫面，或補充錯誤訊息。
 - 如果資訊不足，請先詢問必要資訊，不要過度猜測。
 - 如果問題涉及 RAID、硬碟、錄影資料、資料庫或系統碟，請提醒使用者不要任意初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序。
@@ -113,7 +126,6 @@ SYSTEM_PROMPT = """
 
 請補充資訊：
 - ...
-- ...
 
 注意事項：
 - ...
@@ -121,8 +133,15 @@ SYSTEM_PROMPT = """
 
 
 # =========================
-# 6. Helper: limit LINE reply length
+# 7. Helper functions
 # =========================
+def get_user_id(event):
+    try:
+        return event.source.user_id
+    except Exception:
+        return "unknown_user"
+
+
 def limit_reply_text(text: str, max_length: int = 4500) -> str:
     if not text:
         return "您好，我是 io-bot。\n\n目前無法產生回覆，請稍後再試。"
@@ -135,8 +154,52 @@ def limit_reply_text(text: str, max_length: int = 4500) -> str:
     return text[:max_length] + "\n\n...回覆內容較長，已先截斷。請補充問題後我可以繼續協助。"
 
 
+def save_last_image(user_id: str, image_bytes: bytes):
+    LAST_IMAGE_CACHE[user_id] = {
+        "image_bytes": image_bytes,
+        "timestamp": time.time()
+    }
+    print(f"Saved last image for user: {user_id}")
+
+
+def get_last_image(user_id: str):
+    data = LAST_IMAGE_CACHE.get(user_id)
+
+    if not data:
+        return None
+
+    now = time.time()
+    image_time = data.get("timestamp", 0)
+
+    if now - image_time > IMAGE_CACHE_TTL_SECONDS:
+        print(f"Last image expired for user: {user_id}")
+        LAST_IMAGE_CACHE.pop(user_id, None)
+        return None
+
+    try:
+        image_bytes = data.get("image_bytes")
+        image = Image.open(io.BytesIO(image_bytes))
+        return image
+
+    except Exception as e:
+        print("ERROR: Failed to load cached image")
+        print(str(e))
+        LAST_IMAGE_CACHE.pop(user_id, None)
+        return None
+
+
+def download_line_image(message_id: str) -> bytes:
+    message_content = line_bot_api.get_message_content(message_id)
+
+    image_bytes = b""
+    for chunk in message_content.iter_content():
+        image_bytes += chunk
+
+    return image_bytes
+
+
 # =========================
-# 7. Health check route
+# 8. Health check route
 # =========================
 @app.route("/", methods=["GET"])
 def home():
@@ -152,7 +215,7 @@ def health():
 
 
 # =========================
-# 8. LINE webhook callback
+# 9. LINE webhook callback
 # =========================
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -179,26 +242,49 @@ def callback():
 
 
 # =========================
-# 9. Handle text message
+# 10. Handle text message
 # =========================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
+    user_id = get_user_id(event)
     user_msg = event.message.text
 
     print("========== User text message ==========")
+    print(f"user_id: {user_id}")
     print(user_msg)
 
     try:
-        prompt = f"""
+        last_image = get_last_image(user_id)
+
+        if last_image:
+            print("Cached image found. Answering with text + previous image.")
+
+            prompt = f"""
+{SYSTEM_PROMPT}
+
+使用者先前有上傳一張圖片，現在又補充以下文字問題：
+
+使用者文字問題：
+{user_msg}
+
+請同時根據「上一張圖片」與「這次文字問題」進行判斷與回答。
+"""
+
+            response = model.generate_content([prompt, last_image])
+
+        else:
+            print("No cached image found. Answering text only.")
+
+            prompt = f"""
 {SYSTEM_PROMPT}
 
 使用者提供的文字問題如下：
 {user_msg}
 
-請根據上述問題提供協助。
+請根據上述文字問題提供協助。
 """
 
-        response = model.generate_content(prompt)
+            response = model.generate_content(prompt)
 
         if response and hasattr(response, "text") and response.text:
             reply_text = response.text.strip()
@@ -226,27 +312,25 @@ def handle_text_message(event):
 
 
 # =========================
-# 10. Handle image message
+# 11. Handle image message
 # =========================
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image_message(event):
+    user_id = get_user_id(event)
+
     print("========== User image message received ==========")
+    print(f"user_id: {user_id}")
 
     try:
-        # 1. Download image from LINE
-        message_content = line_bot_api.get_message_content(event.message.id)
-
-        image_bytes = b""
-        for chunk in message_content.iter_content():
-            image_bytes += chunk
+        image_bytes = download_line_image(event.message.id)
+        save_last_image(user_id, image_bytes)
 
         image = Image.open(io.BytesIO(image_bytes))
 
-        # 2. Ask Gemini to analyze image
         prompt = f"""
 {SYSTEM_PROMPT}
 
-使用者上傳了一張圖片，可能是 NVR 主機、BIOS/UEFI、RAID、MegaRAID、EZ Pro、NX / Network Optix、錯誤訊息或監控系統畫面。
+使用者上傳了一張圖片，可能是 NVR 主機、BIOS/UEFI、Windows 安裝畫面、格式化錯誤、RAID、MegaRAID、EZ Pro、NX / Network Optix、錯誤訊息或監控系統畫面。
 
 請根據圖片內容進行判斷，並提供：
 1. 圖片中可能顯示的問題
@@ -285,7 +369,7 @@ def handle_image_message(event):
 
 
 # =========================
-# 11. Run app locally / Render
+# 12. Run app locally / Render
 # =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
