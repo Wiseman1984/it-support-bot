@@ -4,21 +4,20 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import google.generativeai as genai
-from google.generativeai import client  # 導入底層客戶端進行強制設定
+
+# 強制在底層將 API 版本設定為 v1 (正式版)
+# 這能解決日誌中出現的 404 v1beta 錯誤
+os.environ["GOOGLE_API_VERSION"] = "v1"
 
 app = Flask(__name__)
 
-# 1. 讀取環境變數
+# 1. 讀取環境變數 (請確認 Render 上的 Key 名稱正確)
 line_bot_api = LineBotApi(os.getenv('LINE_ACCESS_TOKEN'))
 handler = WebhookHandler(os.getenv('LINE_SECRET'))
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
-# 2. 強制 Gemini 走 v1 正式版路徑 (避開 v1beta 404 報錯)
-# 這裡使用底層設置，不會引發之前的 ValueError
+# 2. 初始化 Gemini
 genai.configure(api_key=GEMINI_KEY, transport='rest')
-gemini_client = client.get_default_generative_client()
-gemini_client.api_version = 'v1' 
-
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 @app.route("/callback", methods=['POST'])
@@ -37,10 +36,13 @@ def handle_message(event):
     try:
         # 呼叫 Gemini 生成內容
         response = model.generate_content(user_msg)
-        reply_text = response.text if response.text else "目前無法回應。"
+        if response.text:
+            reply_text = response.text
+        else:
+            reply_text = "目前無法產生回應，請稍後再試。"
     except Exception as e:
-        print(f"Gemini API Error: {str(e)}")
-        # 這是您在 LINE 上會看到的提示
+        # 如果依然錯誤，會將具體錯誤碼印在 Render 日誌中
+        print(f"Gemini API Error Detail: {str(e)}")
         reply_text = "io bot 權限同步中，請過 10 秒後再嘗試一次。"
 
     line_bot_api.reply_message(
