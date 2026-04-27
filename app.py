@@ -62,17 +62,18 @@ genai.configure(
     transport="rest"
 )
 
-model = genai.GenerativeModel("gemini-2.5-flash")
+# 改用較快、成本較低的 Gemini 2.5 Flash Lite
+model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 
 # =========================
 # 5. Temporary image memory
 # =========================
-# 用來暫存使用者最近上傳的圖片
-# Render 若重啟，這個記憶會消失，這是正常的
+# 暫存使用者最近上傳的圖片
+# 注意：Render 服務重啟後，這個暫存會消失
 LAST_IMAGE_CACHE = {}
 
-# 圖片保留時間，單位秒
+# 圖片保留時間，單位秒：30 分鐘
 IMAGE_CACHE_TTL_SECONDS = 30 * 60
 
 
@@ -143,6 +144,9 @@ def get_user_id(event):
 
 
 def limit_reply_text(text: str, max_length: int = 4500) -> str:
+    """
+    LINE 文字訊息有長度限制，這裡先保守限制在 4500 字。
+    """
     if not text:
         return "您好，我是 io-bot。\n\n目前無法產生回覆，請稍後再試。"
 
@@ -152,6 +156,16 @@ def limit_reply_text(text: str, max_length: int = 4500) -> str:
         return text
 
     return text[:max_length] + "\n\n...回覆內容較長，已先截斷。請補充問題後我可以繼續協助。"
+
+
+def resize_image_for_gemini(image: Image.Image, max_size: int = 1280) -> Image.Image:
+    """
+    將圖片縮小後再送給 Gemini，降低分析時間與傳輸量。
+    max_size 代表圖片最長邊不超過 1280px。
+    """
+    image = image.convert("RGB")
+    image.thumbnail((max_size, max_size))
+    return image
 
 
 def save_last_image(user_id: str, image_bytes: bytes):
@@ -179,6 +193,7 @@ def get_last_image(user_id: str):
     try:
         image_bytes = data.get("image_bytes")
         image = Image.open(io.BytesIO(image_bytes))
+        image = resize_image_for_gemini(image)
         return image
 
     except Exception as e:
@@ -198,6 +213,44 @@ def download_line_image(message_id: str) -> bytes:
     return image_bytes
 
 
+def is_short_followup_question(text: str) -> bool:
+    """
+    判斷是否為常見追問。
+    這類問題如果前面有圖片，就會搭配上一張圖片回答。
+    """
+    if not text:
+        return False
+
+    followup_keywords = [
+        "這是什麼",
+        "這個是什麼",
+        "怎麼辦",
+        "如何處理",
+        "原因",
+        "為什麼",
+        "哪裡錯",
+        "錯在哪",
+        "怎麼解",
+        "怎麼排除",
+        "格式化失敗",
+        "開不了機",
+        "不能開機",
+        "無法開機",
+        "無法登入",
+        "無法錄影",
+        "看不到影像",
+        "沒有畫面",
+        "異常",
+        "錯誤",
+        "error",
+        "failed",
+        "fail",
+    ]
+
+    lower_text = text.lower()
+    return any(keyword.lower() in lower_text for keyword in followup_keywords)
+
+
 # =========================
 # 8. Health check route
 # =========================
@@ -210,7 +263,8 @@ def home():
 def health():
     return {
         "status": "ok",
-        "service": "line-io-bot"
+        "service": "line-io-bot",
+        "model": "gemini-2.5-flash-lite"
     }, 200
 
 
@@ -322,23 +376,35 @@ def handle_image_message(event):
     print(f"user_id: {user_id}")
 
     try:
+        # 1. Download image from LINE
         image_bytes = download_line_image(event.message.id)
+
+        # 2. Save original image bytes for follow-up questions
         save_last_image(user_id, image_bytes)
 
+        # 3. Resize image before sending to Gemini
         image = Image.open(io.BytesIO(image_bytes))
+        image = resize_image_for_gemini(image)
 
+        # 4. Analyze image
         prompt = f"""
 {SYSTEM_PROMPT}
 
-使用者上傳了一張圖片，可能是 NVR 主機、BIOS/UEFI、Windows 安裝畫面、格式化錯誤、RAID、MegaRAID、EZ Pro、NX / Network Optix、錯誤訊息或監控系統畫面。
+使用者上傳了一張圖片，可能與以下情境相關：
+- NVR 主機異常
+- BIOS / UEFI 開機畫面
+- Windows 安裝或格式化錯誤
+- RAID / MegaRAID 狀態
+- EZ Pro 或 NX / Network Optix 錯誤畫面
+- 監控系統畫面、錄影、串流或服務異常
 
-請根據圖片內容進行判斷，並提供：
-1. 圖片中可能顯示的問題
-2. 現場建議排查步驟
+請根據圖片回答：
+1. 問題初步判斷
+2. 建議排查步驟
 3. 需要使用者補充的資訊
-4. 若涉及 RAID / 硬碟 / 系統碟 / 錄影資料，請提醒不要任意初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序
+4. 若涉及 RAID / 硬碟 / 系統碟 / 錄影資料，請提醒不要初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序
 
-請用繁體中文回答。
+請用繁體中文回答，並且開頭必須是「您好，我是 io-bot。」
 """
 
         response = model.generate_content([prompt, image])
