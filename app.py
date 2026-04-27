@@ -62,7 +62,7 @@ genai.configure(
     transport="rest"
 )
 
-# 改用較快、成本較低的 Gemini 2.5 Flash Lite
+# 較快、成本較低，適合 LINE Bot 技術支援場景
 model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 
@@ -70,7 +70,7 @@ model = genai.GenerativeModel("gemini-2.5-flash-lite")
 # 5. Temporary image memory
 # =========================
 # 暫存使用者最近上傳的圖片
-# 注意：Render 服務重啟後，這個暫存會消失
+# Render 服務重啟後，這個暫存會消失
 LAST_IMAGE_CACHE = {}
 
 # 圖片保留時間，單位秒：30 分鐘
@@ -101,6 +101,16 @@ SYSTEM_PROMPT = """
    - 軟體層：服務未啟動、錄影異常、登入異常、網路連線異常、資料庫異常
    - 硬體層：硬碟、RAID 卡、網卡、電源、記憶體、CPU、風扇、溫度、BIOS/UEFI 開機異常、Windows 安裝或格式化異常
 
+4. 網路相關障礙排除
+   - NVR / Server / Client / Camera 網路連線問題
+   - IP 位址、Subnet Mask、Gateway、DNS 設定
+   - Ping 不通、同網段找不到設備、跨網段連線異常
+   - Port、防火牆、NAT、路由設定
+   - ONVIF 搜尋不到攝影機
+   - RTSP 串流無法連線
+   - Switch、網路線、PoE、VLAN 基本排查
+   - NX / EZ Pro Server 與 Client 連線異常
+
 回答規則：
 - 每次回覆開頭都要使用：「您好，我是 io-bot。」
 - 請使用繁體中文與台灣常用技術用語。
@@ -111,7 +121,8 @@ SYSTEM_PROMPT = """
 - 如果圖片內容不清楚，請明確請使用者補拍較清楚的畫面，或補充錯誤訊息。
 - 如果資訊不足，請先詢問必要資訊，不要過度猜測。
 - 如果問題涉及 RAID、硬碟、錄影資料、資料庫或系統碟，請提醒使用者不要任意初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序。
-- 如果問題超出 EZ Pro、NX、MegaRAID、NVR 主機障礙排除範圍，請禮貌說明此機器人主要支援 EZ Pro / NX、MegaRAID 與 NVR 主機障礙排除，建議改洽相關負責窗口。
+- 如果問題涉及網路連線，請優先引導使用者確認 IP、Subnet Mask、Gateway、DNS、Ping、Port、防火牆、Switch、PoE、VLAN 與網路線狀態。
+- 如果問題超出 EZ Pro、NX、MegaRAID、NVR 主機與網路障礙排除範圍，請禮貌說明此機器人主要支援 EZ Pro / NX、MegaRAID、NVR 主機與網路相關障礙排除，建議改洽相關負責窗口。
 
 回答格式請盡量使用：
 
@@ -145,7 +156,7 @@ def get_user_id(event):
 
 def limit_reply_text(text: str, max_length: int = 4500) -> str:
     """
-    LINE 文字訊息有長度限制，這裡先保守限制在 4500 字。
+    LINE 文字訊息有長度限制，這裡保守限制在 4500 字。
     """
     if not text:
         return "您好，我是 io-bot。\n\n目前無法產生回覆，請稍後再試。"
@@ -216,7 +227,7 @@ def download_line_image(message_id: str) -> bytes:
 def is_short_followup_question(text: str) -> bool:
     """
     判斷是否為常見追問。
-    這類問題如果前面有圖片，就會搭配上一張圖片回答。
+    目前主要保留給後續擴充使用。
     """
     if not text:
         return False
@@ -245,6 +256,13 @@ def is_short_followup_question(text: str) -> bool:
         "error",
         "failed",
         "fail",
+        "ping 不到",
+        "連不上",
+        "找不到",
+        "不能連",
+        "無法連線",
+        "rtsp",
+        "onvif",
     ]
 
     lower_text = text.lower()
@@ -397,12 +415,14 @@ def handle_image_message(event):
 - RAID / MegaRAID 狀態
 - EZ Pro 或 NX / Network Optix 錯誤畫面
 - 監控系統畫面、錄影、串流或服務異常
+- 網路連線、IP 設定、防火牆、Port、Switch、PoE、VLAN、RTSP 或 ONVIF 異常
 
 請根據圖片回答：
 1. 問題初步判斷
 2. 建議排查步驟
 3. 需要使用者補充的資訊
 4. 若涉及 RAID / 硬碟 / 系統碟 / 錄影資料，請提醒不要初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序
+5. 若涉及網路問題，請提醒使用者確認 IP、Subnet Mask、Gateway、DNS、Ping、Port、防火牆、Switch、PoE、VLAN 與網路線狀態
 
 請用繁體中文回答，並且開頭必須是「您好，我是 io-bot。」
 """
