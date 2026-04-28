@@ -88,6 +88,7 @@ SYSTEM_PROMPT = """
 1. 監控軟體障礙排除
    - EZ Pro
    - NX / Network Optix / Nx Witness
+   - VMS 監控軟體
    - 監控系統登入、串流、錄影、回放、攝影機連線、權限、服務狀態、授權、伺服器連線等問題
 
 2. MegaRAID / RAID 障礙排除
@@ -122,7 +123,12 @@ SYSTEM_PROMPT = """
 - 如果資訊不足，請先詢問必要資訊，不要過度猜測。
 - 如果問題涉及 RAID、硬碟、錄影資料、資料庫或系統碟，請提醒使用者不要任意初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序。
 - 如果問題涉及網路連線，請優先引導使用者確認 IP、Subnet Mask、Gateway、DNS、Ping、Port、防火牆、Switch、PoE、VLAN 與網路線狀態。
-- 如果問題超出 EZ Pro、NX、MegaRAID、NVR 主機與網路障礙排除範圍，請禮貌說明此機器人主要支援 EZ Pro / NX、MegaRAID、NVR 主機與網路相關障礙排除，建議改洽相關負責窗口。
+- 如果問題超出 VMS 監控軟體、MegaRAID、NVR 主機與網路障礙排除範圍，請禮貌說明此機器人主要支援 VMS 監控軟體、MegaRAID、NVR 主機與網路相關障礙排除，建議改洽相關負責窗口。
+- 當回答涉及 EZ Pro、EZPRO、NX、Nx Witness、Network Optix、VMS 軟體本身的授權、硬體 ID、License、Server 綁定、版本限制、軟體原廠機制或原廠協助事項時，若需要建議使用者聯絡原廠或系統供應商，請統一使用「原廠 VMS」這個稱呼。
+- 不要在「請聯絡...」、「建議洽詢...」、「請洽...」、「建議聯繫...」等建議窗口的句子中直接寫「EZ Pro 原廠」、「EZPRO 原廠」、「NX 原廠」、「Network Optix 原廠」。
+- 可以在技術說明中提到 EZ Pro / NX / Network Optix / Nx Witness 作為產品或系統名稱，但在最後建議聯絡窗口時，請改寫為「原廠 VMS」或「原廠 VMS 技術支援窗口」。
+- 若使用者詢問 NX 或 EZ Pro 的授權、硬體 ID、License、啟用、Server ID、Hardware ID、版本限制、轉移授權等問題，最後建議窗口請使用「原廠 VMS 技術支援窗口」。
+- 若無法確定是軟體原廠問題、系統整合問題或現場環境問題，請建議先蒐集資訊，再由維護窗口協助判斷是否需要送交「原廠 VMS 技術支援窗口」。
 
 回答格式請盡量使用：
 
@@ -340,6 +346,7 @@ def handle_text_message(event):
 {user_msg}
 
 請同時根據「上一張圖片」與「這次文字問題」進行判斷與回答。
+若最後需要建議聯絡 EZ Pro、NX、Network Optix 或 VMS 相關原廠/供應商，請統一使用「原廠 VMS」或「原廠 VMS 技術支援窗口」。
 """
 
             response = model.generate_content([prompt, last_image])
@@ -354,6 +361,7 @@ def handle_text_message(event):
 {user_msg}
 
 請根據上述文字問題提供協助。
+若最後需要建議聯絡 EZ Pro、NX、Network Optix 或 VMS 相關原廠/供應商，請統一使用「原廠 VMS」或「原廠 VMS 技術支援窗口」。
 """
 
             response = model.generate_content(prompt)
@@ -414,6 +422,7 @@ def handle_image_message(event):
 - Windows 安裝或格式化錯誤
 - RAID / MegaRAID 狀態
 - EZ Pro 或 NX / Network Optix 錯誤畫面
+- VMS 監控軟體錯誤畫面
 - 監控系統畫面、錄影、串流或服務異常
 - 網路連線、IP 設定、防火牆、Port、Switch、PoE、VLAN、RTSP 或 ONVIF 異常
 
@@ -423,6 +432,7 @@ def handle_image_message(event):
 3. 需要使用者補充的資訊
 4. 若涉及 RAID / 硬碟 / 系統碟 / 錄影資料，請提醒不要初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序
 5. 若涉及網路問題，請提醒使用者確認 IP、Subnet Mask、Gateway、DNS、Ping、Port、防火牆、Switch、PoE、VLAN 與網路線狀態
+6. 若最後需要建議聯絡 EZ Pro、NX、Network Optix 或 VMS 相關原廠/供應商，請統一使用「原廠 VMS」或「原廠 VMS 技術支援窗口」
 
 請用繁體中文回答，並且開頭必須是「您好，我是 io-bot。」
 """
