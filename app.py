@@ -67,14 +67,21 @@ model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 
 # =========================
-# 5. Temporary image memory
+# 5. Temporary memory
 # =========================
 # 暫存使用者最近上傳的圖片
 # Render 服務重啟後，這個暫存會消失
 LAST_IMAGE_CACHE = {}
 
+# 暫存使用者最近詢問的 VMS 品牌
+# 例如：EZ Pro / NX / VMS
+LAST_BRAND_CACHE = {}
+
 # 圖片保留時間，單位秒：30 分鐘
 IMAGE_CACHE_TTL_SECONDS = 30 * 60
+
+# 品牌脈絡保留時間，單位秒：30 分鐘
+BRAND_CACHE_TTL_SECONDS = 30 * 60
 
 
 # =========================
@@ -110,7 +117,7 @@ SYSTEM_PROMPT = """
    - ONVIF 搜尋不到攝影機
    - RTSP 串流無法連線
    - Switch、網路線、PoE、VLAN 基本排查
-   - NX / EZ Pro Server 與 Client 連線異常
+   - VMS Server 與 Client 連線異常
 
 回答規則：
 - 每次回覆開頭都要使用：「您好，我是 io-bot。」
@@ -123,12 +130,27 @@ SYSTEM_PROMPT = """
 - 如果資訊不足，請先詢問必要資訊，不要過度猜測。
 - 如果問題涉及 RAID、硬碟、錄影資料、資料庫或系統碟，請提醒使用者不要任意初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序。
 - 如果問題涉及網路連線，請優先引導使用者確認 IP、Subnet Mask、Gateway、DNS、Ping、Port、防火牆、Switch、PoE、VLAN 與網路線狀態。
-- 如果問題超出 VMS 監控軟體、MegaRAID、NVR 主機與網路障礙排除範圍，請禮貌說明此機器人主要支援 VMS 監控軟體、MegaRAID、NVR 主機與網路相關障礙排除，建議改洽相關負責窗口。
+
+VMS 品牌回答規則：
+- 回答 VMS 相關問題時，必須依照使用者詢問的品牌回答。
+- 若使用者明確詢問 EZ Pro 或 EZPRO，回答內容請以 EZ Pro 為主，不要主動帶入 NX、Nx Witness 或 Network Optix。
+- 若使用者明確詢問 NX、Nx Witness 或 Network Optix，回答內容請以 NX / Nx Witness 為主，不要主動帶入 EZ Pro。
+- 若使用者未指定品牌，請使用「VMS 監控軟體」作為泛稱。
+- 若同一位使用者前一輪已經指定 VMS 品牌，後續追問若未指定品牌，請延續前一輪品牌脈絡。
+- 技術說明中可以提到使用者指定的產品名稱，例如 EZ Pro 或 NX。
+- 不要在同一個回答中無故同時寫「EZ Pro / NX」，除非使用者明確同時詢問兩者。
+- 若使用者詢問 EZ Pro，請不要寫「EZ Pro / NX」。
+- 若使用者詢問 NX，請不要寫「EZ Pro / NX」。
+
+聯絡窗口稱呼規則：
 - 當回答涉及 EZ Pro、EZPRO、NX、Nx Witness、Network Optix、VMS 軟體本身的授權、硬體 ID、License、Server 綁定、版本限制、軟體原廠機制或原廠協助事項時，若需要建議使用者聯絡原廠或系統供應商，請統一使用「原廠 VMS」這個稱呼。
 - 不要在「請聯絡...」、「建議洽詢...」、「請洽...」、「建議聯繫...」等建議窗口的句子中直接寫「EZ Pro 原廠」、「EZPRO 原廠」、「NX 原廠」、「Network Optix 原廠」。
 - 可以在技術說明中提到 EZ Pro / NX / Network Optix / Nx Witness 作為產品或系統名稱，但在最後建議聯絡窗口時，請改寫為「原廠 VMS」或「原廠 VMS 技術支援窗口」。
-- 若使用者詢問 NX 或 EZ Pro 的授權、硬體 ID、License、啟用、Server ID、Hardware ID、版本限制、轉移授權等問題，最後建議窗口請使用「原廠 VMS 技術支援窗口」。
+- 若使用者詢問授權、硬體 ID、License、啟用、Server ID、Hardware ID、版本限制、轉移授權等問題，最後建議窗口請使用「原廠 VMS 技術支援窗口」。
 - 若無法確定是軟體原廠問題、系統整合問題或現場環境問題，請建議先蒐集資訊，再由維護窗口協助判斷是否需要送交「原廠 VMS 技術支援窗口」。
+
+超出範圍回答規則：
+- 如果問題超出 VMS 監控軟體、MegaRAID、NVR 主機與網路障礙排除範圍，請禮貌說明此機器人主要支援 VMS 監控軟體、MegaRAID、NVR 主機與網路相關障礙排除，建議改洽相關負責窗口。
 
 回答格式請盡量使用：
 
@@ -230,6 +252,131 @@ def download_line_image(message_id: str) -> bytes:
     return image_bytes
 
 
+def detect_vms_brand(text: str) -> str:
+    """
+    偵測使用者問題中的 VMS 品牌。
+    回傳：
+    - EZ Pro
+    - NX
+    - VMS
+    """
+    if not text:
+        return "VMS"
+
+    lower_text = text.lower()
+
+    ezpro_keywords = [
+        "ezpro",
+        "ez pro",
+        "ez-pro",
+        "ez_pro",
+        "ez p",
+        "ezpro server",
+        "ez pro server",
+    ]
+
+    nx_keywords = [
+        "nx",
+        "nx witness",
+        "network optix",
+        "networkoptix",
+        "nx server",
+        "nx vms",
+    ]
+
+    if any(keyword in lower_text for keyword in ezpro_keywords):
+        return "EZ Pro"
+
+    if any(keyword in lower_text for keyword in nx_keywords):
+        return "NX"
+
+    return "VMS"
+
+
+def save_last_brand(user_id: str, brand: str):
+    if brand in ["EZ Pro", "NX"]:
+        LAST_BRAND_CACHE[user_id] = {
+            "brand": brand,
+            "timestamp": time.time()
+        }
+        print(f"Saved last VMS brand for user {user_id}: {brand}")
+
+
+def get_last_brand(user_id: str):
+    data = LAST_BRAND_CACHE.get(user_id)
+
+    if not data:
+        return None
+
+    now = time.time()
+    brand_time = data.get("timestamp", 0)
+
+    if now - brand_time > BRAND_CACHE_TTL_SECONDS:
+        print(f"Last VMS brand expired for user: {user_id}")
+        LAST_BRAND_CACHE.pop(user_id, None)
+        return None
+
+    return data.get("brand")
+
+
+def resolve_vms_brand(user_id: str, user_msg: str) -> str:
+    """
+    先從本次問題判斷品牌。
+    若本次沒有品牌，但過去 30 分鐘內有品牌脈絡，則沿用上一輪品牌。
+    """
+    detected_brand = detect_vms_brand(user_msg)
+
+    if detected_brand in ["EZ Pro", "NX"]:
+        save_last_brand(user_id, detected_brand)
+        return detected_brand
+
+    cached_brand = get_last_brand(user_id)
+    if cached_brand in ["EZ Pro", "NX"]:
+        print(f"Using cached VMS brand for user {user_id}: {cached_brand}")
+        return cached_brand
+
+    return "VMS"
+
+
+def build_brand_instruction(vms_brand: str) -> str:
+    """
+    根據目前判斷出的品牌，給 Gemini 明確的回答限制。
+    """
+    if vms_brand == "EZ Pro":
+        return """
+目前使用者詢問的 VMS 品牌判斷為：EZ Pro。
+
+回答時請遵守：
+- 回答內容請以 EZ Pro 為主。
+- 不要主動帶入 NX、Nx Witness 或 Network Optix。
+- 不要寫「EZ Pro / NX」這種合併稱呼。
+- 若需要泛稱軟體，可寫「EZ Pro」或「VMS 監控軟體」。
+- 若最後需要建議聯絡原廠或支援窗口，請使用「原廠 VMS 技術支援窗口」。
+"""
+
+    if vms_brand == "NX":
+        return """
+目前使用者詢問的 VMS 品牌判斷為：NX。
+
+回答時請遵守：
+- 回答內容請以 NX / Nx Witness 為主。
+- 不要主動帶入 EZ Pro。
+- 不要寫「EZ Pro / NX」這種合併稱呼。
+- 若需要泛稱軟體，可寫「NX」或「VMS 監控軟體」。
+- 若最後需要建議聯絡原廠或支援窗口，請使用「原廠 VMS 技術支援窗口」。
+"""
+
+    return """
+目前使用者未明確指定 VMS 品牌。
+
+回答時請遵守：
+- 請使用「VMS 監控軟體」作為泛稱。
+- 不要無故同時列出 EZ Pro / NX。
+- 除非使用者明確提到品牌，否則不要主動指定為 EZ Pro 或 NX。
+- 若最後需要建議聯絡原廠或支援窗口，請使用「原廠 VMS 技術支援窗口」。
+"""
+
+
 def is_short_followup_question(text: str) -> bool:
     """
     判斷是否為常見追問。
@@ -269,6 +416,11 @@ def is_short_followup_question(text: str) -> bool:
         "無法連線",
         "rtsp",
         "onvif",
+        "授權",
+        "硬體 id",
+        "hardware id",
+        "license",
+        "licence",
     ]
 
     lower_text = text.lower()
@@ -333,6 +485,10 @@ def handle_text_message(event):
 
     try:
         last_image = get_last_image(user_id)
+        vms_brand = resolve_vms_brand(user_id, user_msg)
+        brand_instruction = build_brand_instruction(vms_brand)
+
+        print(f"Resolved VMS brand: {vms_brand}")
 
         if last_image:
             print("Cached image found. Answering with text + previous image.")
@@ -340,13 +496,19 @@ def handle_text_message(event):
             prompt = f"""
 {SYSTEM_PROMPT}
 
+{brand_instruction}
+
 使用者先前有上傳一張圖片，現在又補充以下文字問題：
 
 使用者文字問題：
 {user_msg}
 
 請同時根據「上一張圖片」與「這次文字問題」進行判斷與回答。
-若最後需要建議聯絡 EZ Pro、NX、Network Optix 或 VMS 相關原廠/供應商，請統一使用「原廠 VMS」或「原廠 VMS 技術支援窗口」。
+
+再次提醒：
+- 若目前品牌判斷為 EZ Pro，請不要主動提到 NX。
+- 若目前品牌判斷為 NX，請不要主動提到 EZ Pro。
+- 若最後需要建議聯絡原廠或供應商，請統一使用「原廠 VMS 技術支援窗口」。
 """
 
             response = model.generate_content([prompt, last_image])
@@ -357,11 +519,17 @@ def handle_text_message(event):
             prompt = f"""
 {SYSTEM_PROMPT}
 
+{brand_instruction}
+
 使用者提供的文字問題如下：
 {user_msg}
 
 請根據上述文字問題提供協助。
-若最後需要建議聯絡 EZ Pro、NX、Network Optix 或 VMS 相關原廠/供應商，請統一使用「原廠 VMS」或「原廠 VMS 技術支援窗口」。
+
+再次提醒：
+- 若目前品牌判斷為 EZ Pro，請不要主動提到 NX。
+- 若目前品牌判斷為 NX，請不要主動提到 EZ Pro。
+- 若最後需要建議聯絡原廠或供應商，請統一使用「原廠 VMS 技術支援窗口」。
 """
 
             response = model.generate_content(prompt)
@@ -408,20 +576,28 @@ def handle_image_message(event):
         # 2. Save original image bytes for follow-up questions
         save_last_image(user_id, image_bytes)
 
-        # 3. Resize image before sending to Gemini
+        # 3. Get brand context if user already mentioned one before
+        cached_brand = get_last_brand(user_id)
+        vms_brand = cached_brand if cached_brand in ["EZ Pro", "NX"] else "VMS"
+        brand_instruction = build_brand_instruction(vms_brand)
+
+        print(f"Resolved VMS brand for image: {vms_brand}")
+
+        # 4. Resize image before sending to Gemini
         image = Image.open(io.BytesIO(image_bytes))
         image = resize_image_for_gemini(image)
 
-        # 4. Analyze image
+        # 5. Analyze image
         prompt = f"""
 {SYSTEM_PROMPT}
+
+{brand_instruction}
 
 使用者上傳了一張圖片，可能與以下情境相關：
 - NVR 主機異常
 - BIOS / UEFI 開機畫面
 - Windows 安裝或格式化錯誤
 - RAID / MegaRAID 狀態
-- EZ Pro 或 NX / Network Optix 錯誤畫面
 - VMS 監控軟體錯誤畫面
 - 監控系統畫面、錄影、串流或服務異常
 - 網路連線、IP 設定、防火牆、Port、Switch、PoE、VLAN、RTSP 或 ONVIF 異常
@@ -432,9 +608,14 @@ def handle_image_message(event):
 3. 需要使用者補充的資訊
 4. 若涉及 RAID / 硬碟 / 系統碟 / 錄影資料，請提醒不要初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序
 5. 若涉及網路問題，請提醒使用者確認 IP、Subnet Mask、Gateway、DNS、Ping、Port、防火牆、Switch、PoE、VLAN 與網路線狀態
-6. 若最後需要建議聯絡 EZ Pro、NX、Network Optix 或 VMS 相關原廠/供應商，請統一使用「原廠 VMS」或「原廠 VMS 技術支援窗口」
+6. 若最後需要建議聯絡原廠或供應商，請統一使用「原廠 VMS 技術支援窗口」
 
 請用繁體中文回答，並且開頭必須是「您好，我是 io-bot。」
+
+再次提醒：
+- 若目前品牌判斷為 EZ Pro，請不要主動提到 NX。
+- 若目前品牌判斷為 NX，請不要主動提到 EZ Pro。
+- 若目前品牌判斷為 VMS，請使用「VMS 監控軟體」作為泛稱。
 """
 
         response = model.generate_content([prompt, image])
