@@ -62,32 +62,31 @@ genai.configure(
     transport="rest"
 )
 
-# 較快、成本較低，適合 LINE Bot 技術支援場景
 model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 
 # =========================
 # 5. Temporary memory
 # =========================
-# 暫存使用者最近上傳的圖片
-# Render 服務重啟後，這個暫存會消失
 LAST_IMAGE_CACHE = {}
-
-# 暫存使用者最近詢問的 VMS 品牌
-# 例如：EZ Pro / NX / VMS
 LAST_BRAND_CACHE = {}
+CHAT_HISTORY_CACHE = {}
 
-# 圖片保留時間，單位秒：30 分鐘
-IMAGE_CACHE_TTL_SECONDS = 30 * 60
+# 暫存時間：15 分鐘
+IMAGE_CACHE_TTL_SECONDS = 15 * 60
+BRAND_CACHE_TTL_SECONDS = 15 * 60
+CHAT_HISTORY_TTL_SECONDS = 15 * 60
 
-# 品牌脈絡保留時間，單位秒：30 分鐘
-BRAND_CACHE_TTL_SECONDS = 30 * 60
+# 最近 3 輪對話
+CHAT_HISTORY_MAX_TURNS = 3
+
+MEMORY_NOTICE = "提醒：系統會暫時保留最近 3 輪對話約 15 分鐘，以協助延續排查脈絡。"
 
 
 # =========================
 # 6. Common Prompt
 # =========================
-SYSTEM_PROMPT = """
+SYSTEM_PROMPT = f"""
 你是 io-bot，一個公司內部與客戶現場使用的 IT / FAE 技術支援 LINE Bot。
 
 你的主要支援範圍如下：
@@ -121,11 +120,13 @@ SYSTEM_PROMPT = """
 
 回答規則：
 - 每次回覆開頭都要使用：「您好，我是 io-bot。」
+- 每次回覆開頭後方請加上一行提醒：「{MEMORY_NOTICE}」
 - 請使用繁體中文與台灣常用技術用語。
 - 回答要簡潔、清楚、可執行。
 - 優先提供現場可操作的排查步驟。
 - 如果使用者提供的是圖片，請先根據圖片判斷可能問題，再提供排查建議。
 - 如果使用者先傳圖片、後續又用文字追問，請同時參考上一張圖片與這次文字。
+- 如果有提供最近對話紀錄，請根據最近對話延續上下文，但不要被過去錯誤判斷過度影響。
 - 如果圖片內容不清楚，請明確請使用者補拍較清楚的畫面，或補充錯誤訊息。
 - 如果資訊不足，請先詢問必要資訊，不要過度猜測。
 - 如果問題涉及 RAID、硬碟、錄影資料、資料庫或系統碟，請提醒使用者不要任意初始化、格式化、重建 RAID、拔插硬碟或更換硬碟順序。
@@ -155,6 +156,7 @@ VMS 品牌回答規則：
 回答格式請盡量使用：
 
 您好，我是 io-bot。
+{MEMORY_NOTICE}
 
 問題初步判斷：
 ...
@@ -175,6 +177,10 @@ VMS 品牌回答規則：
 # =========================
 # 7. Helper functions
 # =========================
+def default_error_reply(message: str) -> str:
+    return f"您好，我是 io-bot。\n{MEMORY_NOTICE}\n\n{message}"
+
+
 def get_user_id(event):
     try:
         return event.source.user_id
@@ -183,11 +189,8 @@ def get_user_id(event):
 
 
 def limit_reply_text(text: str, max_length: int = 4500) -> str:
-    """
-    LINE 文字訊息有長度限制，這裡保守限制在 4500 字。
-    """
     if not text:
-        return "您好，我是 io-bot。\n\n目前無法產生回覆，請稍後再試。"
+        return default_error_reply("目前無法產生回覆，請稍後再試。")
 
     text = text.strip()
 
@@ -198,10 +201,6 @@ def limit_reply_text(text: str, max_length: int = 4500) -> str:
 
 
 def resize_image_for_gemini(image: Image.Image, max_size: int = 1280) -> Image.Image:
-    """
-    將圖片縮小後再送給 Gemini，降低分析時間與傳輸量。
-    max_size 代表圖片最長邊不超過 1280px。
-    """
     image = image.convert("RGB")
     image.thumbnail((max_size, max_size))
     return image
@@ -253,13 +252,6 @@ def download_line_image(message_id: str) -> bytes:
 
 
 def detect_vms_brand(text: str) -> str:
-    """
-    偵測使用者問題中的 VMS 品牌。
-    回傳：
-    - EZ Pro
-    - NX
-    - VMS
-    """
     if not text:
         return "VMS"
 
@@ -270,7 +262,6 @@ def detect_vms_brand(text: str) -> str:
         "ez pro",
         "ez-pro",
         "ez_pro",
-        "ez p",
         "ezpro server",
         "ez pro server",
     ]
@@ -320,10 +311,6 @@ def get_last_brand(user_id: str):
 
 
 def resolve_vms_brand(user_id: str, user_msg: str) -> str:
-    """
-    先從本次問題判斷品牌。
-    若本次沒有品牌，但過去 30 分鐘內有品牌脈絡，則沿用上一輪品牌。
-    """
     detected_brand = detect_vms_brand(user_msg)
 
     if detected_brand in ["EZ Pro", "NX"]:
@@ -339,9 +326,6 @@ def resolve_vms_brand(user_id: str, user_msg: str) -> str:
 
 
 def build_brand_instruction(vms_brand: str) -> str:
-    """
-    根據目前判斷出的品牌，給 Gemini 明確的回答限制。
-    """
     if vms_brand == "EZ Pro":
         return """
 目前使用者詢問的 VMS 品牌判斷為：EZ Pro。
@@ -377,54 +361,79 @@ def build_brand_instruction(vms_brand: str) -> str:
 """
 
 
-def is_short_followup_question(text: str) -> bool:
-    """
-    判斷是否為常見追問。
-    目前主要保留給後續擴充使用。
-    """
-    if not text:
-        return False
+def clean_expired_chat_history(user_id: str):
+    data = CHAT_HISTORY_CACHE.get(user_id)
 
-    followup_keywords = [
-        "這是什麼",
-        "這個是什麼",
-        "怎麼辦",
-        "如何處理",
-        "原因",
-        "為什麼",
-        "哪裡錯",
-        "錯在哪",
-        "怎麼解",
-        "怎麼排除",
-        "格式化失敗",
-        "開不了機",
-        "不能開機",
-        "無法開機",
-        "無法登入",
-        "無法錄影",
-        "看不到影像",
-        "沒有畫面",
-        "異常",
-        "錯誤",
-        "error",
-        "failed",
-        "fail",
-        "ping 不到",
-        "連不上",
-        "找不到",
-        "不能連",
-        "無法連線",
-        "rtsp",
-        "onvif",
-        "授權",
-        "硬體 id",
-        "hardware id",
-        "license",
-        "licence",
-    ]
+    if not data:
+        return
 
-    lower_text = text.lower()
-    return any(keyword.lower() in lower_text for keyword in followup_keywords)
+    now = time.time()
+    updated_at = data.get("updated_at", 0)
+
+    if now - updated_at > CHAT_HISTORY_TTL_SECONDS:
+        print(f"Chat history expired for user: {user_id}")
+        CHAT_HISTORY_CACHE.pop(user_id, None)
+
+
+def get_chat_history_text(user_id: str) -> str:
+    clean_expired_chat_history(user_id)
+
+    data = CHAT_HISTORY_CACHE.get(user_id)
+
+    if not data:
+        return "目前沒有可用的最近對話紀錄。"
+
+    turns = data.get("turns", [])
+
+    if not turns:
+        return "目前沒有可用的最近對話紀錄。"
+
+    lines = []
+
+    for idx, turn in enumerate(turns, start=1):
+        user_text = turn.get("user", "").strip()
+        bot_text = turn.get("bot", "").strip()
+
+        if len(user_text) > 500:
+            user_text = user_text[:500] + "...已截斷"
+
+        if len(bot_text) > 800:
+            bot_text = bot_text[:800] + "...已截斷"
+
+        lines.append(f"第 {idx} 輪：")
+        lines.append(f"使用者：{user_text}")
+        lines.append(f"io-bot：{bot_text}")
+
+    return "\n".join(lines)
+
+
+def save_chat_turn(user_id: str, user_text: str, bot_text: str):
+    clean_expired_chat_history(user_id)
+
+    data = CHAT_HISTORY_CACHE.get(user_id)
+
+    if not data:
+        data = {
+            "turns": [],
+            "updated_at": time.time()
+        }
+
+    turns = data.get("turns", [])
+
+    turns.append({
+        "user": user_text,
+        "bot": bot_text,
+        "timestamp": time.time()
+    })
+
+    turns = turns[-CHAT_HISTORY_MAX_TURNS:]
+
+    CHAT_HISTORY_CACHE[user_id] = {
+        "turns": turns,
+        "updated_at": time.time()
+    }
+
+    print(f"Saved chat history for user {user_id}. Turns: {len(turns)}")
 
 
 # =========================
@@ -440,7 +449,9 @@ def health():
     return {
         "status": "ok",
         "service": "line-io-bot",
-        "model": "gemini-2.5-flash-lite"
+        "model": "gemini-2.5-flash-lite",
+        "chat_history_max_turns": CHAT_HISTORY_MAX_TURNS,
+        "memory_minutes": 15
     }, 200
 
 
@@ -487,6 +498,7 @@ def handle_text_message(event):
         last_image = get_last_image(user_id)
         vms_brand = resolve_vms_brand(user_id, user_msg)
         brand_instruction = build_brand_instruction(vms_brand)
+        chat_history_text = get_chat_history_text(user_id)
 
         print(f"Resolved VMS brand: {vms_brand}")
 
@@ -498,14 +510,19 @@ def handle_text_message(event):
 
 {brand_instruction}
 
+以下是最近 3 輪對話紀錄，請用來延續上下文：
+{chat_history_text}
+
 使用者先前有上傳一張圖片，現在又補充以下文字問題：
 
 使用者文字問題：
 {user_msg}
 
-請同時根據「上一張圖片」與「這次文字問題」進行判斷與回答。
+請同時根據「最近對話紀錄」、「上一張圖片」與「這次文字問題」進行判斷與回答。
 
 再次提醒：
+- 回覆開頭必須包含：「您好，我是 io-bot。」
+- 回覆第二行必須包含：「{MEMORY_NOTICE}」
 - 若目前品牌判斷為 EZ Pro，請不要主動提到 NX。
 - 若目前品牌判斷為 NX，請不要主動提到 EZ Pro。
 - 若最後需要建議聯絡原廠或供應商，請統一使用「原廠 VMS 技術支援窗口」。
@@ -521,12 +538,17 @@ def handle_text_message(event):
 
 {brand_instruction}
 
-使用者提供的文字問題如下：
+以下是最近 3 輪對話紀錄，請用來延續上下文：
+{chat_history_text}
+
+使用者提供的最新文字問題如下：
 {user_msg}
 
-請根據上述文字問題提供協助。
+請根據「最近對話紀錄」與「最新文字問題」提供協助。
 
 再次提醒：
+- 回覆開頭必須包含：「您好，我是 io-bot。」
+- 回覆第二行必須包含：「{MEMORY_NOTICE}」
 - 若目前品牌判斷為 EZ Pro，請不要主動提到 NX。
 - 若目前品牌判斷為 NX，請不要主動提到 EZ Pro。
 - 若最後需要建議聯絡原廠或供應商，請統一使用「原廠 VMS 技術支援窗口」。
@@ -537,20 +559,25 @@ def handle_text_message(event):
         if response and hasattr(response, "text") and response.text:
             reply_text = response.text.strip()
         else:
-            reply_text = "您好，我是 io-bot。\n\n目前 Gemini 回應為空，請再試一次。"
+            reply_text = default_error_reply("目前 Gemini 回應為空，請再試一次。")
 
     except Exception as e:
         print("========== Gemini Text API Error ==========")
         print(str(e))
         traceback.print_exc()
 
-        reply_text = "您好，我是 io-bot。\n\n目前系統暫時無法回應，請稍後再試。"
+        reply_text = default_error_reply("目前系統暫時無法回應，請稍後再試。")
 
     try:
+        final_reply_text = limit_reply_text(reply_text)
+
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=limit_reply_text(reply_text))
+            TextSendMessage(text=final_reply_text)
         )
+
+        save_chat_turn(user_id, user_msg, final_reply_text)
+
         print("Text reply sent successfully.")
 
     except Exception as e:
@@ -570,28 +597,26 @@ def handle_image_message(event):
     print(f"user_id: {user_id}")
 
     try:
-        # 1. Download image from LINE
         image_bytes = download_line_image(event.message.id)
-
-        # 2. Save original image bytes for follow-up questions
         save_last_image(user_id, image_bytes)
 
-        # 3. Get brand context if user already mentioned one before
         cached_brand = get_last_brand(user_id)
         vms_brand = cached_brand if cached_brand in ["EZ Pro", "NX"] else "VMS"
         brand_instruction = build_brand_instruction(vms_brand)
+        chat_history_text = get_chat_history_text(user_id)
 
         print(f"Resolved VMS brand for image: {vms_brand}")
 
-        # 4. Resize image before sending to Gemini
         image = Image.open(io.BytesIO(image_bytes))
         image = resize_image_for_gemini(image)
 
-        # 5. Analyze image
         prompt = f"""
 {SYSTEM_PROMPT}
 
 {brand_instruction}
+
+以下是最近 3 輪對話紀錄，請用來延續上下文：
+{chat_history_text}
 
 使用者上傳了一張圖片，可能與以下情境相關：
 - NVR 主機異常
@@ -602,7 +627,7 @@ def handle_image_message(event):
 - 監控系統畫面、錄影、串流或服務異常
 - 網路連線、IP 設定、防火牆、Port、Switch、PoE、VLAN、RTSP 或 ONVIF 異常
 
-請根據圖片回答：
+請根據「最近對話紀錄」與「圖片內容」回答：
 1. 問題初步判斷
 2. 建議排查步驟
 3. 需要使用者補充的資訊
@@ -610,9 +635,11 @@ def handle_image_message(event):
 5. 若涉及網路問題，請提醒使用者確認 IP、Subnet Mask、Gateway、DNS、Ping、Port、防火牆、Switch、PoE、VLAN 與網路線狀態
 6. 若最後需要建議聯絡原廠或供應商，請統一使用「原廠 VMS 技術支援窗口」
 
-請用繁體中文回答，並且開頭必須是「您好，我是 io-bot。」
+請用繁體中文回答。
 
 再次提醒：
+- 回覆開頭必須包含：「您好，我是 io-bot。」
+- 回覆第二行必須包含：「{MEMORY_NOTICE}」
 - 若目前品牌判斷為 EZ Pro，請不要主動提到 NX。
 - 若目前品牌判斷為 NX，請不要主動提到 EZ Pro。
 - 若目前品牌判斷為 VMS，請使用「VMS 監控軟體」作為泛稱。
@@ -623,20 +650,25 @@ def handle_image_message(event):
         if response and hasattr(response, "text") and response.text:
             reply_text = response.text.strip()
         else:
-            reply_text = "您好，我是 io-bot。\n\n我已收到圖片，但目前無法判讀內容。請補拍較清楚的畫面，或補充錯誤訊息。"
+            reply_text = default_error_reply("我已收到圖片，但目前無法判讀內容。請補拍較清楚的畫面，或補充錯誤訊息。")
 
     except Exception as e:
         print("========== Gemini Image API Error ==========")
         print(str(e))
         traceback.print_exc()
 
-        reply_text = "您好，我是 io-bot。\n\n我已收到圖片，但目前系統暫時無法分析圖片，請稍後再試，或改用文字描述問題。"
+        reply_text = default_error_reply("我已收到圖片，但目前系統暫時無法分析圖片，請稍後再試，或改用文字描述問題。")
 
     try:
+        final_reply_text = limit_reply_text(reply_text)
+
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=limit_reply_text(reply_text))
+            TextSendMessage(text=final_reply_text)
         )
+
+        save_chat_turn(user_id, "使用者上傳了一張圖片。", final_reply_text)
+
         print("Image reply sent successfully.")
 
     except Exception as e:
