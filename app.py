@@ -10,14 +10,12 @@ from langdetect import detect
 app = Flask(__name__)
 
 # ==========================================
-# 1. 環境變數設定與驗證 (保持原本最穩定的寫法)
+# 1. 環境變數設定 (相容各種命名，且取消強制崩潰機制)
 # ==========================================
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, GEMINI_API_KEY]):
-    raise ValueError("Missing one or more required environment variables.")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
+# 同時支援 GEMINI_API_KEY 與 GOOGLE_API_KEY
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -29,7 +27,7 @@ genai.configure(api_key=GEMINI_API_KEY, transport="rest")
 model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 # ==========================================
-# 3. 系統提示詞 (SYSTEM_PROMPT) - 僅在此處新增中控與未提供服務之邏輯
+# 3. 系統提示詞 (SYSTEM_PROMPT)
 # ==========================================
 SYSTEM_PROMPT = """
 你是 io-bot，負責提供專業、親切且條理分明的 IT 與安防監控系統技術支援。
@@ -56,7 +54,7 @@ MEMORY_NOTICE = "提醒：系統會暫時保留最近 3 輪對話約 15 分鐘�
 CHAT_HISTORY = {}
 
 # ==========================================
-# 5. Helper Functions & 語系防禦辨識器 (維持剛剛測試成功的版本)
+# 5. Helper Functions & 語系防禦辨識器
 # ==========================================
 def get_language_instruction(text: str) -> str:
     if not text:
@@ -112,7 +110,7 @@ def callback():
     return 'OK'
 
 # ==========================================
-# 7. LINE 訊息事件處理邏輯 (保持最原汁原味結構)
+# 7. LINE 訊息事件處理邏輯
 # ==========================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
