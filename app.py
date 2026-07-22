@@ -10,14 +10,15 @@ from langdetect import detect
 app = Flask(__name__)
 
 # ==========================================
-# 1. 環境變數設定與驗證
+# 1. 環境變數設定與驗證 (自動相容 GOOGLE_API_KEY)
 # ==========================================
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# 同時支援 GEMINI_API_KEY 與 GOOGLE_API_KEY，避免 Render 抓不到 KeyError
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
 if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, GEMINI_API_KEY]):
-    raise ValueError("Missing one or more required environment variables.")
+    raise ValueError("Missing one or more required environment variables (LINE tokens or GEMINI/GOOGLE_API_KEY).")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -52,38 +53,31 @@ SYSTEM_PROMPT = """
 MEMORY_NOTICE = "提醒：系統會暫時保留最近 3 輪對話約 15 分鐘，以協助延續排查脈絡。"
 
 # ==========================================
-# 4. 快取記憶體 (CHAT_HISTORY) 設定
+# 4. 快取記憶體 (CHAT_HISTORY)
 # ==========================================
-# 結構: { user_id: [ {"role": "user/model", "parts": [...]}, ... ] }
 CHAT_HISTORY = {}
 
 # ==========================================
 # 5. Helper Functions & 語系防禦辨識器
 # ==========================================
 def get_language_instruction(text: str) -> str:
-    """
-    採用多層正則過濾 + langdetect 雙重防禦機制：
-    1. 先抓日文假名（確保帶漢字的日文不被誤判）
-    2. 再抓韓文諺文
-    3. 排除日韓特有字後，只要含有 Unicode 漢字（\u4e00-\u9fff），100% 強制繁體中文（防錯字中文被誤判）
-    4. 最後純英文走 langdetect
-    """
+    """採用多層正則過濾 + langdetect 雙重防禦機制"""
     if not text:
         return ""
 
-    # 1. 檢測是否包含日文假名 (平假名 \u3040-\u309f / 片假名 \u30a0-\u30ff)
+    # 1. 檢測是否包含日文假名
     if re.search(r'[\u3040-\u30ff]', text):
         return "\n【⚠️最高指令：偵測到使用者使用日文，請「完全使用日文(日本語)」回覆整篇內容，包含開頭問候語與所有標題結構，絕不允許出現中文或英文！】\n"
 
-    # 2. 檢測是否包含韓文字母 (諺文 \uac00-\ud7af / \u1100-\u11ff)
+    # 2. 檢測是否包含韓文字母
     if re.search(r'[\uac00-\ud7af\u1100-\u11ff]', text):
         return "\n【⚠️最高指令：偵測到使用者使用韓文，請「完全使用韓文(한국어)」回覆整篇內容，包含開頭問候語與所有標題結構，絕不允許出現中文或英文！】\n"
 
-    # 3. 只要含有 Unicode 漢字，100% 認定為中文（包含錯字中文）
+    # 3. 只要含有 Unicode 漢字，100% 認定為中文（防錯字中文被誤判成韓文）
     if re.search(r'[\u4e00-\u9fff]', text):
         return "\n【⚠️最高指令：使用者輸入中文，請務必完全使用「繁體中文（台灣常用技術用語）」回覆整篇內容，絕不允許出現韓文、日文或英文！】\n"
 
-    # 4. 若完全無中日韓文字，才交由 langdetect 判斷（例如純英文）
+    # 4. 純英文由 langdetect 判斷
     try:
         lang = detect(text)
         if lang == 'en':
@@ -91,7 +85,7 @@ def get_language_instruction(text: str) -> str:
     except:
         pass
 
-    # 5. 保底機制：預設鎖定繁體中文
+    # 5. 保底機制
     return "\n【⚠️最高指令：請完全使用「繁體中文（台灣常用技術用語）」回覆，絕不允許出現韓文、日文或英文！】\n"
 
 
@@ -128,37 +122,35 @@ def handle_message(event):
     user_id = get_user_id(event)
     user_msg = event.message.text.strip()
 
-    # 取得動態語言最高指令
     lang_instruction = get_language_instruction(user_msg)
 
-    # 建立或取得對話歷史
     if user_id not in CHAT_HISTORY:
         CHAT_HISTORY[user_id] = []
 
-    # 限制歷史紀錄長度 (最多保留最近 6 條訊息 = 3 輪對話)
-    history = CHAT_HISTORY[user_id][-6:]
+    # 取得近 3 輪對話文字
+    past_messages = CHAT_HISTORY[user_id][-6:]
+    history_context = ""
+    if past_messages:
+        history_context = "\n【過往對話紀錄】\n" + "\n".join(past_messages) + "\n"
 
     try:
-        # 組裝發送給 Gemini 的 Prompt (含 System Prompt + 歷史對話 + 語言指令 + 使用者新問題)
-        chat = model.start_chat(history=history)
+        # 將 Context 統一打包進 Prompt 呼叫 generate_content
+        full_prompt = f"{SYSTEM_PROMPT}\n{history_context}\n{lang_instruction}\n使用者最新問題：{user_msg}"
         
-        full_prompt = f"{SYSTEM_PROMPT}\n{lang_instruction}\n使用者問題：{user_msg}"
-        response = chat.send_message(full_prompt)
+        response = model.generate_content(full_prompt)
         bot_reply = response.text.strip()
 
-        # 更新對話快取
-        CHAT_HISTORY[user_id].append({"role": "user", "parts": [user_msg]})
-        CHAT_HISTORY[user_id].append({"role": "model", "parts": [bot_reply]})
-        CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-6:]  # 維持最新 3 輪
+        # 更新對話歷史紀錄
+        CHAT_HISTORY[user_id].append(f"使用者: {user_msg}")
+        CHAT_HISTORY[user_id].append(f"io-bot: {bot_reply}")
+        CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-6:]
 
-        # 組裝最後傳給 LINE 的文字
         final_reply = f"您好，我是 io-bot。\n{MEMORY_NOTICE}\n\n{bot_reply}"
 
     except Exception as e:
         print(f"Gemini API Error: {e}")
         final_reply = default_error_reply("抱歉，系統暫時無法處理您的請求，請稍後再試。")
 
-    # 回傳給 LINE 使用者
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=final_reply)
