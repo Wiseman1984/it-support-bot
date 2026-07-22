@@ -10,12 +10,11 @@ from langdetect import detect
 app = Flask(__name__)
 
 # ==========================================
-# 1. 環境變數設定 (相容各種命名，且取消強制崩潰機制)
+# 1. 環境變數設定 (相容各種 Render 命名，且不強制崩潰)
 # ==========================================
-# 相容各種 Render 變數命名
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or os.getenv("LINE_ACCESS_TOKEN") or ""
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET") or os.getenv("LINE_SECRET") or ""
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or """
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -29,8 +28,7 @@ model = genai.GenerativeModel("gemini-2.5-flash-lite")
 # ==========================================
 # 3. 系統提示詞 (SYSTEM_PROMPT)
 # ==========================================
-SYSTEM_PROMPT = """
-你是 io-bot，負責提供專業、親切且條理分明的 IT 與安防監控系統技術支援。
+SYSTEM_PROMPT = """你是 io-bot，負責提供專業、親切且條理分明的 IT 與安防監控系統技術支援。
 
 【產品與專有名詞字典定義】
 - AIONXIS：公司自主開發的中控系統（中央管理系統/Web管理介面），絕非 Nx Witness，請勿將兩者混為一談。
@@ -43,8 +41,7 @@ SYSTEM_PROMPT = """
    - 檢查系統服務 (Service / Daemon) 是否正常運行。
    - 檢查 Web Port (例如 80/443/8080) 是否被占用或遭防火牆擋下。
    - 檢查連線 IP 與瀏覽器快取。
-3. 若遇到目前系統尚未正式搭載的模組（如：臉部辨識、跌倒偵測等），可說明該功能屬於進階/擴充模組，排查時請先確認授權與模組載入狀態。
-"""
+3. 若遇到目前系統尚未正式搭載的模組（如：臉部辨識、跌倒偵測等），可說明該功能屬於進階/擴充模組，排查時請先確認授權與模組載入狀態。"""
 
 MEMORY_NOTICE = "提醒：系統會暫時保留最近 3 輪對話約 15 分鐘，以協助延續排查脈絡。"
 
