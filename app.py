@@ -10,7 +10,7 @@ from langdetect import detect
 app = Flask(__name__)
 
 # ==========================================
-# 1. 環境變數設定 (相容各種 Render 命名，且不強制崩潰)
+# 1. 環境變數設定
 # ==========================================
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or os.getenv("LINE_ACCESS_TOKEN") or ""
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET") or os.getenv("LINE_SECRET") or ""
@@ -30,15 +30,18 @@ model = genai.GenerativeModel("gemini-2.5-flash-lite")
 # ==========================================
 SYSTEM_PROMPT = """你是 io-bot，負責提供專業、親切且條理分明的 IT 與安防監控系統技術支援。
 
+【回覆格式規範】
+- 開頭已經有系統統一問候，請「絕對不要」在回覆開頭重複自我介紹或問候（例如切勿輸入：您好！我是 io-bot...），請直接從解答重點開始說明。
+
 【產品與專有名詞字典定義】
 - AIONXIS：公司自主開發的中控系統（中央管理系統/Web管理介面），絕非 Nx Witness，請勿將兩者混為一談。
   * 運行環境：以 Docker Container 容器方式運行於主機上。
-  * 預設服務 Port：7045（Web 管理介面預設通道）。
+  * 預設服務 Port：7045 (Web 管理介面預設通道)。
   * 標準排查步驟：
     1. 檢查 Docker 服務與容器狀態：請執行 `docker ps` 確認 AIONXIS 容器是否正常運行 (Up 狀態)。若已停止，請執行 `docker restart <container_name>`。
-    2. 檢查 Port 7045 通道：確認 Port 7045 未被其他服務占用，且伺服器防火牆（如 ufw 或 iptables）與網路防火牆已允許 7045 Port 通訊。
+    2. 檢查 Port 7045 通道：確認 Port 7045 未被其他服務占用，且伺服器防火牆 (如 ufw 或 iptables) 與網路防火牆已允許 7045 Port 通訊。
     3. 檢查 IP 與網頁存取：確認瀏覽器輸入格式為 `http://<伺服器IP>:7045`，並可嘗試使用無痕模式排除瀏覽器快取問題。
-- EZ Pro：專業監控管理軟體（VMS）。
+- EZ Pro：專業監控管理軟體 (VMS)。
 - Nx Witness：合作/整合之第三方 VMS 軟體。
 
 【回應原則與邊界聲明】
@@ -49,7 +52,8 @@ SYSTEM_PROMPT = """你是 io-bot，負責提供專業、親切且條理分明的
    - 檢查連線 IP 與瀏覽器快取。
 3. 若遇到目前系統尚未正式搭載的模組（如：臉部辨識、跌倒偵測等），可說明該功能屬於進階/擴充模組，排查時請先確認授權與模組載入狀態。"""
 
-MEMORY_NOTICE = "提醒：系統會暫時保留最近 3 輪對話約 15 分鐘，以協助延續排查脈絡。"
+# 定義統一的簡短問候開頭
+HEADER_NOTICE = "您好，我是 io-bot，很高興為您提供協助。\n提醒：系統會暫時保留最近 3 輪對話約 15 分鐘，以協助延續排查脈絡。"
 
 # ==========================================
 # 4. 快取記憶體
@@ -88,7 +92,7 @@ def get_language_instruction(text: str) -> str:
 
 
 def default_error_reply(message: str) -> str:
-    return f"您好，我是 io-bot。\n{MEMORY_NOTICE}\n\n{message}"
+    return f"{HEADER_NOTICE}\n\n{message}"
 
 
 def get_user_id(event):
@@ -137,7 +141,7 @@ def handle_message(event):
         CHAT_HISTORY[user_id].append({"role": "model", "parts": [bot_reply]})
         CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-6:]
 
-        final_reply = f"您好，我是 io-bot。\n{MEMORY_NOTICE}\n\n{bot_reply}"
+        final_reply = f"{HEADER_NOTICE}\n\n{bot_reply}"
 
     except Exception as e:
         print(f"Gemini API Error: {e}")
