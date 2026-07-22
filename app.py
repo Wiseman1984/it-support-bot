@@ -10,37 +10,26 @@ from langdetect import detect
 app = Flask(__name__)
 
 # ==========================================
-# 1. 環境變數設定與驗證 (帶排查 Log)
+# 1. 環境變數設定與驗證 (保持原本最穩定的寫法)
 # ==========================================
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 印出當前抓到的狀態 (出錯時可以一眼看出哪一個是 None)
-print("=== 變數載入檢查 ===")
-print(f"LINE_ACCESS_TOKEN: {'已設定' if LINE_CHANNEL_ACCESS_TOKEN else '❌ 未設定(None)'}")
-print(f"LINE_SECRET:       {'已設定' if LINE_CHANNEL_SECRET else '❌ 未設定(None)'}")
-print(f"GEMINI_API_KEY:    {'已設定' if GEMINI_API_KEY else '❌ 未設定(None)'}")
-
-missing_vars = []
-if not LINE_CHANNEL_ACCESS_TOKEN: missing_vars.append("LINE_CHANNEL_ACCESS_TOKEN")
-if not LINE_CHANNEL_SECRET: missing_vars.append("LINE_CHANNEL_SECRET")
-if not GEMINI_API_KEY: missing_vars.append("GEMINI_API_KEY/GOOGLE_API_KEY")
-
-if missing_vars:
-    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, GEMINI_API_KEY]):
+    raise ValueError("Missing one or more required environment variables.")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 # ==========================================
-# 2. 初始化 Gemini 模型 (使用 gemini-2.5-flash-lite)
+# 2. 初始化 Gemini 模型
 # ==========================================
 genai.configure(api_key=GEMINI_API_KEY, transport="rest")
 model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 # ==========================================
-# 3. 系統提示詞 (SYSTEM_PROMPT) - 知識庫與邊界
+# 3. 系統提示詞 (SYSTEM_PROMPT) - 僅在此處新增中控與未提供服務之邏輯
 # ==========================================
 SYSTEM_PROMPT = """
 你是 io-bot，負責提供專業、親切且條理分明的 IT 與安防監控系統技術支援。
@@ -50,28 +39,26 @@ SYSTEM_PROMPT = """
 - EZ Pro：專業監控管理軟體（VMS）。
 - Nx Witness：合作/整合之第三方 VMS 軟體。
 
-【邊界與回應原則】
-1. 嚴禁幻覺與硬套指令：若使用者提及的產品或模組（如：AIONXIS、臉部辨識、跌倒偵測、中控系統等）在知識庫中尚未有特定的專屬命令，請給出「通用排查步驟」（如：服務進程、網頁 Port 埠號、網路連線、防火牆），絕對禁止將其硬套為 Nx Witness 或 EZ Pro 的專有指令。
-2. 網頁/中控系統（如 AIONXIS）打不開時的標準通用排查：
-   - 檢查伺服器主機服務 (Service / Daemon) 是否正在運行。
-   - 檢查 Web Port (如 80, 443, 8080 等) 是否被占用或遭防火牆擋下。
-   - 檢查用戶端與伺服器之間的網路連線 (Ping) 與瀏覽器快取。
-3. 若遇到未推出的擴充功能（如臉辨、跌倒偵測），可說明該功能屬於進階/未來規劃模組，排查時請先確認授權與模組狀態。
-4. 請始終保持條理清晰，使用條列式步驟引導使用者排查。
+【回應原則與邊界聲明】
+1. 嚴禁幻覺與硬套指令：若使用者提及的專有名詞或產品名稱（如：AIONXIS、跌倒偵測等）在知識庫中尚未有詳細技術指令，請給出通用排查步驟（如：服務進程、網頁 Web Port、網路連線、防火牆），「絕對禁止」將其硬套成 Nx Witness 或 EZ Pro 的指令。
+2. 當遇到「網頁/中控系統（如 AIONXIS）打不開」時的通用標準步驟：
+   - 檢查系統服務 (Service / Daemon) 是否正常運行。
+   - 檢查 Web Port (例如 80/443/8080) 是否被占用或遭防火牆擋下。
+   - 檢查連線 IP 與瀏覽器快取。
+3. 若遇到目前系統尚未正式搭載的模組（如：臉部辨識、跌倒偵測等），可說明該功能屬於進階/擴充模組，排查時請先確認授權與模組載入狀態。
 """
 
 MEMORY_NOTICE = "提醒：系統會暫時保留最近 3 輪對話約 15 分鐘，以協助延續排查脈絡。"
 
 # ==========================================
-# 4. 快取記憶體 (CHAT_HISTORY)
+# 4. 快取記憶體
 # ==========================================
 CHAT_HISTORY = {}
 
 # ==========================================
-# 5. Helper Functions & 語系防禦辨識器
+# 5. Helper Functions & 語系防禦辨識器 (維持剛剛測試成功的版本)
 # ==========================================
 def get_language_instruction(text: str) -> str:
-    """採用多層正則過濾 + langdetect 雙重防禦機制"""
     if not text:
         return ""
 
@@ -83,7 +70,7 @@ def get_language_instruction(text: str) -> str:
     if re.search(r'[\uac00-\ud7af\u1100-\u11ff]', text):
         return "\n【⚠️最高指令：偵測到使用者使用韓文，請「完全使用韓文(한국어)」回覆整篇內容，包含開頭問候語與所有標題結構，絕不允許出現中文或英文！】\n"
 
-    # 3. 只要含有 Unicode 漢字，100% 認定為中文（防錯字中文被誤判成韓文）
+    # 3. 只要含有 Unicode 漢字，100% 認定為中文
     if re.search(r'[\u4e00-\u9fff]', text):
         return "\n【⚠️最高指令：使用者輸入中文，請務必完全使用「繁體中文（台灣常用技術用語）」回覆整篇內容，絕不允許出現韓文、日文或英文！】\n"
 
@@ -125,7 +112,7 @@ def callback():
     return 'OK'
 
 # ==========================================
-# 7. LINE 訊息事件處理邏輯
+# 7. LINE 訊息事件處理邏輯 (保持最原汁原味結構)
 # ==========================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -137,22 +124,16 @@ def handle_message(event):
     if user_id not in CHAT_HISTORY:
         CHAT_HISTORY[user_id] = []
 
-    # 取得近 3 輪對話文字
-    past_messages = CHAT_HISTORY[user_id][-6:]
-    history_context = ""
-    if past_messages:
-        history_context = "\n【過往對話紀錄】\n" + "\n".join(past_messages) + "\n"
+    history = CHAT_HISTORY[user_id][-6:]
 
     try:
-        # 將 Context 統一打包進 Prompt 呼叫 generate_content
-        full_prompt = f"{SYSTEM_PROMPT}\n{history_context}\n{lang_instruction}\n使用者最新問題：{user_msg}"
-        
-        response = model.generate_content(full_prompt)
+        chat = model.start_chat(history=history)
+        full_prompt = f"{SYSTEM_PROMPT}\n{lang_instruction}\n使用者問題：{user_msg}"
+        response = chat.send_message(full_prompt)
         bot_reply = response.text.strip()
 
-        # 更新對話歷史紀錄
-        CHAT_HISTORY[user_id].append(f"使用者: {user_msg}")
-        CHAT_HISTORY[user_id].append(f"io-bot: {bot_reply}")
+        CHAT_HISTORY[user_id].append({"role": "user", "parts": [user_msg]})
+        CHAT_HISTORY[user_id].append({"role": "model", "parts": [bot_reply]})
         CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-6:]
 
         final_reply = f"您好，我是 io-bot。\n{MEMORY_NOTICE}\n\n{bot_reply}"
