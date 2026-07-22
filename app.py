@@ -43,6 +43,13 @@ SYSTEM_PROMPT = """你是 io-bot，負責提供專業、親切且條理分明的
     1. 檢查 Docker 服務與容器狀態：請執行 `docker ps` 確認 AIONXIS 容器是否正常運行 (Up 狀態)。若已停止，請執行 `docker restart <container_name>`。
     2. 檢查 Port 7045 通道：確認 Port 7045 未被其他服務占用，且伺服器防火牆 (如 ufw 或 iptables) 與網路防火牆已允許 7045 Port 通訊。
     3. 檢查 IP 與網頁存取：確認瀏覽器輸入格式為 `http://<伺服器IP>:7045`，並可嘗試使用無痕模式排除瀏覽器快取問題。
+- Lume Face : 公司自主開發的臉部辨識系統（中央管理系統/Web管理介面），絕非 Nx Witness，請勿將兩者混為一談。
+  * 運行環境：以 Docker Container 容器方式運行於主機上。
+  * 預設服務 Port：7022 (Web 管理介面預設通道)。
+  * 標準排查步驟：
+    1. 檢查 Docker 服務與容器狀態：請執行 `docker ps` 確認 lumeface 容器是否正常運行 (Up 狀態)。若已停止，請執行 `docker restart <container_name>`。
+    2. 檢查 Port 7022 通道：確認 Port 7022 未被其他服務占用，且伺服器防火牆 (如 ufw 或 iptables) 與網路防火牆已允許 7022 Port 通訊。
+    3. 檢查 IP 與網頁存取：確認瀏覽器輸入格式為 `http://<伺服器IP>:7022`，並可嘗試使用無痕模式排除瀏覽器快取問題。
 - EZ Pro：專業監控管理軟體 (VMS)。
 - Nx Witness：合作/整合之第三方 VMS 軟體。
 
