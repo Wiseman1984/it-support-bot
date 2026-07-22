@@ -10,15 +10,25 @@ from langdetect import detect
 app = Flask(__name__)
 
 # ==========================================
-# 1. 環境變數設定與驗證 (自動相容 GOOGLE_API_KEY)
+# 1. 環境變數設定與驗證 (帶排查 Log)
 # ==========================================
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
-# 同時支援 GEMINI_API_KEY 與 GOOGLE_API_KEY，避免 Render 抓不到 KeyError
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
-if not all([LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, GEMINI_API_KEY]):
-    raise ValueError("Missing one or more required environment variables (LINE tokens or GEMINI/GOOGLE_API_KEY).")
+# 印出當前抓到的狀態 (出錯時可以一眼看出哪一個是 None)
+print("=== 變數載入檢查 ===")
+print(f"LINE_ACCESS_TOKEN: {'已設定' if LINE_CHANNEL_ACCESS_TOKEN else '❌ 未設定(None)'}")
+print(f"LINE_SECRET:       {'已設定' if LINE_CHANNEL_SECRET else '❌ 未設定(None)'}")
+print(f"GEMINI_API_KEY:    {'已設定' if GEMINI_API_KEY else '❌ 未設定(None)'}")
+
+missing_vars = []
+if not LINE_CHANNEL_ACCESS_TOKEN: missing_vars.append("LINE_CHANNEL_ACCESS_TOKEN")
+if not LINE_CHANNEL_SECRET: missing_vars.append("LINE_CHANNEL_SECRET")
+if not GEMINI_API_KEY: missing_vars.append("GEMINI_API_KEY/GOOGLE_API_KEY")
+
+if missing_vars:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
