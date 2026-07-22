@@ -53,47 +53,64 @@ SYSTEM_PROMPT = """你是 io-bot，負責提供專業、親切且條理分明的
    - 檢查連線 IP 與瀏覽器快取。
 3. 若遇到目前系統尚未正式搭載的模組（如：臉部辨識、跌倒偵測等），可說明該功能屬於進階/擴充模組，排查時請先確認授權與模組載入狀態。"""
 
-# 定義統一的簡短問候開頭
-HEADER_NOTICE = "您好，我是 io-bot，很高興為您提供協助。\n提醒：系統會暫時保留最近 3 輪對話約 15 分鐘，以協助延續排查脈絡。"
-
 # ==========================================
 # 4. 快取記憶體
 # ==========================================
 CHAT_HISTORY = {}
 
 # ==========================================
-# 5. Helper Functions & 語系防禦辨識器
+# 5. Helper Functions & 多語系招呼語與辨識器
 # ==========================================
-def get_language_instruction(text: str) -> str:
+def get_header_notice(lang_code: str) -> str:
+    """根據語言回傳對應的招呼語與保留提示"""
+    if lang_code == 'ja':
+        return "こんにちは、io-botです。お役に立てて光栄です。\n注意：トラブルシューティングの文脈を考慮するため、直近3回の会話は約15分間一時的に保持されます。"
+    elif lang_code == 'ko':
+        return "안녕하세요, io-bot입니다. 도움이 되어 기쁩니다.\n참고: 문제 해결 맥락을 유지하기 위해 최근 3회의 대화는 약 15분간 임시 저장됩니다."
+    elif lang_code == 'en':
+        return "Hello, I am io-bot. Happy to assist you.\nNotice: To help continue the troubleshooting context, the last 3 turns of conversation will be kept for about 15 minutes."
+    else:
+        # 預設為繁體中文
+        return "您好，我是 io-bot，很高興為您提供協助。\n提醒：系統會暫時保留最近 3 輪對話約 15 分鐘，以協助延續排查脈絡。"
+
+
+def get_language_info(text: str):
+    """傳回 (語系指令, 語言代碼)"""
     if not text:
-        return ""
+        return "", "zh"
 
     # 1. 檢測是否包含日文假名
     if re.search(r'[\u3040-\u30ff]', text):
-        return "\n【⚠️最高指令：偵測到使用者使用日文，請「完全使用日文(日本語)」回覆整篇內容，包含開頭問候語與所有標題結構，絕不允許出現中文或英文！】\n"
+        instruction = "\n【⚠️最高指令：偵測到使用者使用日文，請「完全使用日文(日本語)」回覆整篇內容，包含所有標題結構，絕不允許出現中文或英文！】\n"
+        return instruction, "ja"
 
     # 2. 檢測是否包含韓文字母
     if re.search(r'[\uac00-\ud7af\u1100-\u11ff]', text):
-        return "\n【⚠️最高指令：偵測到使用者使用韓文，請「完全使用韓文(한국어)」回覆整篇內容，包含開頭問候語與所有標題結構，絕不允許出現中文或英文！】\n"
+        instruction = "\n【⚠️最高指令：偵測到使用者使用韓文，請「完全使用韓文(한국어)」回覆整篇內容，包含所有標題結構，絕不允許出現中文或英文！】\n"
+        return instruction, "ko"
 
-    # 3. 只要含有 Unicode 漢字，100% 認定為中文
+    # 3. 只要含有 Unicode 漢字，認定為中文
     if re.search(r'[\u4e00-\u9fff]', text):
-        return "\n【⚠️最高指令：使用者輸入中文，請務必完全使用「繁體中文（台灣常用技術用語）」回覆整篇內容，絕不允許出現韓文、日文或英文！】\n"
+        instruction = "\n【⚠️最高指令：使用者輸入中文，請務必完全使用「繁體中文（台灣常用技術用語）」回覆整篇內容，絕不允許出現韓文、日文或英文！】\n"
+        return instruction, "zh"
 
     # 4. 純英文由 langdetect 判斷
     try:
         lang = detect(text)
         if lang == 'en':
-            return "\n【⚠️最高指令：偵測到使用者使用英文，請「完全使用英文(English)」回覆整篇內容，絕不允許出現中文！】\n"
+            instruction = "\n【⚠️最高指令：偵測到使用者使用英文，請「完全使用英文(English)」回覆整篇內容，絕不允許出現中文！】\n"
+            return instruction, "en"
     except:
         pass
 
     # 5. 保底機制
-    return "\n【⚠️最高指令：請完全使用「繁體中文（台灣常用技術用語）」回覆，絕不允許出現韓文、日文或英文！】\n"
+    instruction = "\n【⚠️最高指令：請完全使用「繁體中文（台灣常用技術用語）」回覆，絕不允許出現韓文、日文或英文！】\n"
+    return instruction, "zh"
 
 
-def default_error_reply(message: str) -> str:
-    return f"{HEADER_NOTICE}\n\n{message}"
+def default_error_reply(lang_code: str, message: str) -> str:
+    header = get_header_notice(lang_code)
+    return f"{header}\n\n{message}"
 
 
 def get_user_id(event):
@@ -125,7 +142,8 @@ def handle_message(event):
     user_id = get_user_id(event)
     user_msg = event.message.text.strip()
 
-    lang_instruction = get_language_instruction(user_msg)
+    lang_instruction, lang_code = get_language_info(user_msg)
+    header_notice = get_header_notice(lang_code)
 
     if user_id not in CHAT_HISTORY:
         CHAT_HISTORY[user_id] = []
@@ -142,11 +160,11 @@ def handle_message(event):
         CHAT_HISTORY[user_id].append({"role": "model", "parts": [bot_reply]})
         CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-6:]
 
-        final_reply = f"{HEADER_NOTICE}\n\n{bot_reply}"
+        final_reply = f"{header_notice}\n\n{bot_reply}"
 
     except Exception as e:
         print(f"Gemini API Error: {e}")
-        final_reply = default_error_reply("抱歉，系統暫時無法處理您的請求，請稍後再試。")
+        final_reply = default_error_reply(lang_code, "抱歉，系統暫時無法處理您的請求，請稍後再試。")
 
     line_bot_api.reply_message(
         event.reply_token,
