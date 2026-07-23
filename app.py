@@ -1,5 +1,6 @@
 import os
 import re
+import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -78,6 +79,25 @@ CHAT_HISTORY = {}
 # ==========================================
 # 5. Helper Functions & 多語系招呼語與辨識器
 # ==========================================
+def fetch_nx_forum_knowledge(query_text: str) -> str:
+    """幕後向 Nx 官方論壇 API 搜尋參考技術文章"""
+    url = "https://support.networkoptix.com/hc/en-us/api/v2/community/posts/search.json"
+    params = {'query': query_text, 'per_page': 2}
+    try:
+        response = requests.get(url, params=params, timeout=4)
+        if response.status_code == 200:
+            posts = response.json().get('posts', [])
+            extracted_info = ""
+            for post in posts:
+                title = post.get('title', '')
+                details = post.get('details', '')
+                extracted_info += f"標題: {title}\n內容摘要: {details[:500]}\n---\n"
+            return extracted_info if extracted_info else ""
+    except Exception as e:
+        print(f"Nx Forum Search Exception: {e}")
+    return ""
+
+
 def get_header_notice(lang_code: str) -> str:
     """根據語言回傳對應的招呼語與保留提示"""
     if lang_code == 'ja':
@@ -167,9 +187,17 @@ def handle_message(event):
 
     history = CHAT_HISTORY[user_id][-6:]
 
+    # 判斷是否需要向 Nx 論壇進行幕後搜尋
+    is_ezpro_query = any(keyword in user_msg.lower() for keyword in ['ez pro', 'ezpro', 'vms', '錄影', '監控', 'nx'])
+    forum_context = ""
+    if is_ezpro_query:
+        forum_data = fetch_nx_forum_knowledge(user_msg)
+        if forum_data:
+            forum_context = f"\n\n【幕後搜尋到的第三方技術討論參考資料（請將其精華融會貫通後回答客戶，絕不要叫客戶自己去看）：】\n{forum_data}"
+
     try:
         chat = model.start_chat(history=history)
-        full_prompt = f"{SYSTEM_PROMPT}\n{lang_instruction}\n使用者問題：{user_msg}"
+        full_prompt = f"{SYSTEM_PROMPT}\n{lang_instruction}{forum_context}\n使用者問題：{user_msg}"
         response = chat.send_message(full_prompt)
         bot_reply = response.text.strip()
 
