@@ -4,7 +4,7 @@ import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
 import google.generativeai as genai
 from langdetect import detect
 
@@ -173,7 +173,7 @@ def callback():
     return 'OK'
 
 # ==========================================
-# 7. LINE 訊息事件處理邏輯
+# 7. LINE 訊息事件處理邏輯 (文字訊息)
 # ==========================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -218,7 +218,62 @@ def handle_message(event):
     )
 
 # ==========================================
-# 8. Flask App 啟動
+# 8. LINE 訊息事件處理邏輯 (圖片訊息辨識與多語系支援)
+# ==========================================
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image(event):
+    user_id = get_user_id(event)
+    
+    try:
+        # 1. 向 LINE 伺服器取得圖片內容
+        message_content = line_bot_api.get_message_content(event.message.id)
+        image_bytes = message_content.content
+
+        # 2. 封裝圖片封包供 Gemini 分析
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_bytes
+        }
+
+        # 3. 提示 Gemini 自動辨識圖片內的文字語言，並嚴格遵循該語言規範與收斂條款
+        image_prompt = f"""{SYSTEM_PROMPT}
+
+【⚠️最高指令：視覺語言自動偵測與回覆規範】
+1. 請先辨識這張圖片中的錯誤視窗、介面或系統文字屬於何種語言（繁體中文 / 英文 / 日文 / 韓文 等）。
+2. 請「完全使用圖片中的語言」回答排查步驟！
+3. 若圖片語言為非繁體中文/海外地區（如日文、韓文、英文），「絕對禁止」附上 Google 表單連結 (forms.gle)，請引導聯繫經銷商或 Email ( support@ionetworks.co )。
+4. 開頭請勿重複自我介紹或問候。
+
+請詳細分析圖片中的錯誤訊息與代碼，並給出精準的解決步驟。"""
+
+        # 4. 呼叫 Gemini 視覺多模態生成解答
+        response = model.generate_content([image_prompt, image_part])
+        bot_reply = response.text.strip()
+
+        # 5. 根據 Gemini 回覆的語言自動搭配頂部招呼語 (Header)
+        _, detected_lang = get_language_info(bot_reply)
+        header_notice = get_header_notice(detected_lang)
+
+        # 6. 寫入歷史記錄
+        if user_id not in CHAT_HISTORY:
+            CHAT_HISTORY[user_id] = []
+        CHAT_HISTORY[user_id].append({"role": "user", "parts": ["[使用者傳送了一張錯誤截圖]"]})
+        CHAT_HISTORY[user_id].append({"role": "model", "parts": [bot_reply]})
+        CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-6:]
+
+        final_reply = f"{header_notice}\n\n{bot_reply}"
+
+    except Exception as e:
+        print(f"Image Handle Error: {e}")
+        final_reply = default_error_reply("zh", "抱歉，目前無法解析圖片內容。請嘗試以文字描述您遇到的問題與錯誤代碼。")
+
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=final_reply)
+    )
+
+# ==========================================
+# 9. Flask App 啟動
 # ==========================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
