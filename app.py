@@ -198,7 +198,17 @@ def handle_message(event):
 
     try:
         chat = model.start_chat(history=history)
-        full_prompt = f"{SYSTEM_PROMPT}\n{lang_instruction}{forum_context}\n使用者問題：{user_msg}"
+        
+        # 【關鍵修復點】：將最高語系指令放置在 Prompt 最頂端與最底部，形成雙重鎖定
+        full_prompt = f"""{lang_instruction}
+
+{SYSTEM_PROMPT}
+{forum_context}
+
+使用者問題：{user_msg}
+
+【⚠️最後提醒】：請再次確認，你的整篇答覆（包含標題、步驟、專有名詞說明）必須「完全使用與使用者相同的語言（{lang_code}）」進行撰寫！若為非繁中語系，嚴禁出現任何繁體中文或 Google 表單連結！"""
+
         response = chat.send_message(full_prompt)
         bot_reply = response.text.strip()
 
