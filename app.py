@@ -71,8 +71,8 @@ def call_groq_ai(user_message):
                 "content": user_message,
             },
         ],
-        model="llama-3.3-70b-versatile",  # 使用穩定且支援的 Groq 模型
-        temperature=0.3,
+        model="llama3-70b-8192",  # 使用支援的 Groq 模型
+    temperature=0.3,
     )
     return chat_completion.choices[0].message.content
   except Exception as e:
