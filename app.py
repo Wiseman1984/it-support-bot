@@ -1,3 +1,4 @@
+import base64
 import os
 from flask import Flask, abort, request
 from groq import Groq
@@ -63,7 +64,7 @@ SYSTEM_PROMPT = """
 """
 
 
-# 自動動態偵測 Groq 可用模型的函式
+# 自動動態偵測 Groq 文字可用模型的函式
 def get_working_model():
   try:
     models = groq_client.models.list()
@@ -74,8 +75,6 @@ def get_working_model():
       return models.data[0].id
   except Exception as e:
     print(f"自動偵測模型失敗: {e}")
-
-  # 保底預設值
   return "openai/gpt-oss-20b"
 
 
@@ -84,14 +83,8 @@ def call_groq_ai(user_message):
     active_model = get_working_model()
     chat_completion = groq_client.chat.completions.create(
         messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": user_message,
-            },
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
         ],
         model=active_model,
         temperature=0.3,
@@ -122,19 +115,44 @@ def handle_message(event):
   line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
 
 
-# 處理圖片訊息事件（當使用者上傳藍屏截圖或照片時觸發）
+# 處理圖片訊息事件（具備視覺辨識與排除建議能力）
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image_message(event):
   message_id = event.message.id
   try:
     # 取得 LINE 傳來的圖片二進位內容
     message_content = line_bot_api.get_message_content(message_id)
-    reply_text = (
-        "已收到您的錯誤截圖！系統已成功接收畫面，後續將為您提供畫面解析與排除指引。"
+    image_bytes = b"".join(message_content.iter_content())
+
+    # 將圖片轉為 Base64 格式
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    image_url = f"data:image/jpeg;base64,{base64_image}"
+
+    # 呼叫 Groq 視覺模型進行看圖解析
+    chat_completion = groq_client.chat.completions.create(
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "請幫我分析這張錯誤截圖或畫面，指出可能發生的狀況與具體的排除解法。"
+                        ),
+                    },
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            },
+        ],
+        model="llama-3.2-11b-vision-preview",  # 支援多模態視覺辨識的 Groq 模型
+        temperature=0.3,
     )
+    reply_text = chat_completion.choices[0].message.content
+
   except Exception as e:
-    print(f"下載圖片發生錯誤: {e}")
-    reply_text = "抱歉，接收圖片時發生異常，請稍後再試。"
+    print(f"圖片辨識發生錯誤: {e}")
+    reply_text = "抱歉，解析圖片時發生異常，請確認圖片格式或稍後再試。"
 
   line_bot_api.reply_message(
       event.reply_token, TextSendMessage(text=reply_text)
