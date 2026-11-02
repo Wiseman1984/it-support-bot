@@ -71,7 +71,7 @@ def call_groq_ai(user_message):
                 "content": user_message,
             },
         ],
-      model="mixtral-8x7b-32768",
+      model="llama-3.3-70b-versatile",
     temperature=0.3,
     )
     return chat_completion.choices[0].message.content
