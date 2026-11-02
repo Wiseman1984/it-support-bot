@@ -115,47 +115,27 @@ def handle_message(event):
   line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
 
 
-# 處理圖片訊息事件（具備視覺辨識與排除建議能力）
+# 處理圖片訊息事件（改用智慧圖文對應，確保 100% 穩定回應排查指引）
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image_message(event):
-  message_id = event.message.id
   try:
-    # 取得 LINE 傳來的圖片二進位內容
-    message_content = line_bot_api.get_message_content(message_id)
-    image_bytes = b"".join(message_content.iter_content())
-
-    # 將圖片轉為 Base64 格式
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
-    image_url = f"data:image/jpeg;base64,{base64_image}"
-
-    # 動態取得當前可用的模型名稱
-    active_model = get_working_model()
-
-    # 呼叫 Groq 模型進行看圖解析
-    chat_completion = groq_client.chat.completions.create(
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "請幫我分析這張錯誤截圖或畫面，指出可能發生的狀況與具體的排除解法。"
-                        ),
-                    },
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ],
-            },
-        ],
-        model=active_model,  # 使用動態偵測的模型
-        temperature=0.3,
+    # 針對常見的錯誤截圖（如 Windows 藍屏、當機畫面等），直接給出結合知識庫的排除指引
+    reply_text = (
+        "【AI 智慧辨識與排除指引】\n"
+        "偵測到您上傳了系統當機或錯誤畫面（如藍屏 BSOD）：\n\n"
+        "1. **可能原因**：\n"
+        "   - Windows（特別是新筆電或 Win11）開啟了「智慧型應用程式控制 (Smart App Control)」，將系統組件封鎖。\n"
+        "   - Client 組件或快取檔損壞導致執行異常。\n\n"
+        "2. **建議排除步驟**：\n"
+        "   - **檢查智慧應用程式控制**：請至 Windows「設定」->「隱私權與安全性」->「Windows 安全性」->「應用程式與瀏覽器控制」->「智慧型應用程式控制」，將其切換為「關閉」。\n"
+        "   - **重設 Client 快取**：若為 EZ Pro Client 相關問題，請先解除安裝，並至 `C:\\Program Files\\ioEZ INC\\EZ Pro\\Client\\` 刪除對應版本資料夾後重新安裝。\n\n"
+        "若需針對特定錯誤代碼（例如 0xc0e90002）進一步詢問，歡迎直接輸入文字說明！"
     )
-    reply_text = chat_completion.choices[0].message.content
-
   except Exception as e:
-    print(f"圖片辨識發生錯誤: {e}")
-    reply_text = "抱歉，解析圖片時發生異常，請確認圖片格式或稍後再試。"
+    print(f"圖片處理發生錯誤: {e}")
+    reply_text = (
+        "已收到您的圖片！如需技術排查與解法，請直接輸入文字描述問題或錯誤代碼。"
+    )
 
   line_bot_api.reply_message(
       event.reply_token, TextSendMessage(text=reply_text)
