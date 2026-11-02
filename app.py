@@ -128,7 +128,10 @@ def handle_image_message(event):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     image_url = f"data:image/jpeg;base64,{base64_image}"
 
-    # 呼叫 Groq 視覺模型進行看圖解析
+    # 動態取得當前可用的模型名稱
+    active_model = get_working_model()
+
+    # 呼叫 Groq 模型進行看圖解析
     chat_completion = groq_client.chat.completions.create(
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -145,7 +148,7 @@ def handle_image_message(event):
                 ],
             },
         ],
-        model="llama-3.2-11b-vision-preview",  # 支援多模態視覺辨識的 Groq 模型
+        model=active_model,  # 使用動態偵測的模型
         temperature=0.3,
     )
     reply_text = chat_completion.choices[0].message.content
