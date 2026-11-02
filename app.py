@@ -71,7 +71,7 @@ def call_groq_ai(user_message):
                 "content": user_message,
             },
         ],
-      model="llama-3.1-8b-instant",  # 正確的 Groq 官方 Model ID
+      model="mixtral-8x7b-32768",
     temperature=0.3,
     )
     return chat_completion.choices[0].message.content
