@@ -71,7 +71,7 @@ def call_groq_ai(user_message):
                 "content": user_message,
             },
         ],
-     model="llama-3.3-70b-specdec",  # Groq 目前支援的現行模型
+     model="openai/gpt-oss-20b",
     temperature=0.3,
     )
     return chat_completion.choices[0].message.content
