@@ -1,7 +1,4 @@
-Flask
-gunicorn
+flask
 line-bot-sdk
-google-generativeai
-Pillow
-flask-cors
-langdetect
+groq
+requests
