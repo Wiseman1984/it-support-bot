@@ -71,7 +71,7 @@ def call_groq_ai(user_message):
                 "content": user_message,
             },
         ],
-       model="llama3-8b-8192",  # Groq 官方目前最穩定的免費即時模型
+      model="llama-3.1-8b-instant",  # 正確的 Groq 官方 Model ID
     temperature=0.3,
     )
     return chat_completion.choices[0].message.content
