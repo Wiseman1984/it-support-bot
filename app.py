@@ -3,7 +3,12 @@ from flask import Flask, abort, request
 from groq import Groq
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import (
+    ImageMessage,
+    MessageEvent,
+    TextMessage,
+    TextSendMessage,
+)
 
 app = Flask(__name__)
 
@@ -58,8 +63,25 @@ SYSTEM_PROMPT = """
 """
 
 
+# 自動動態偵測 Groq 可用模型的函式
+def get_working_model():
+  try:
+    models = groq_client.models.list()
+    for m in models.data:
+      if "gpt" in m.id or "llama" in m.id or "mixtral" in m.id:
+        return m.id
+    if models.data:
+      return models.data[0].id
+  except Exception as e:
+    print(f"自動偵測模型失敗: {e}")
+
+  # 保底預設值
+  return "openai/gpt-oss-20b"
+
+
 def call_groq_ai(user_message):
   try:
+    active_model = get_working_model()
     chat_completion = groq_client.chat.completions.create(
         messages=[
             {
@@ -71,8 +93,8 @@ def call_groq_ai(user_message):
                 "content": user_message,
             },
         ],
-     model="openai/gpt-oss-20b",
-    temperature=0.3,
+        model=active_model,
+        temperature=0.3,
     )
     return chat_completion.choices[0].message.content
   except Exception as e:
@@ -92,11 +114,31 @@ def callback():
   return "OK"
 
 
+# 處理文字訊息事件
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
   user_msg = event.message.text
   ai_reply = call_groq_ai(user_msg)
   line_bot_api.reply_message(event.reply_token, TextSendMessage(text=ai_reply))
+
+
+# 處理圖片訊息事件（當使用者上傳藍屏截圖或照片時觸發）
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image_message(event):
+  message_id = event.message.id
+  try:
+    # 取得 LINE 傳來的圖片二進位內容
+    message_content = line_bot_api.get_message_content(message_id)
+    reply_text = (
+        "已收到您的錯誤截圖！系統已成功接收畫面，後續將為您提供畫面解析與排除指引。"
+    )
+  except Exception as e:
+    print(f"下載圖片發生錯誤: {e}")
+    reply_text = "抱歉，接收圖片時發生異常，請稍後再試。"
+
+  line_bot_api.reply_message(
+      event.reply_token, TextSendMessage(text=reply_text)
+  )
 
 
 if __name__ == "__main__":
