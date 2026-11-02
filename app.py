@@ -11,8 +11,8 @@ app = Flask(__name__)
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 # LINE Bot 設定
-line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
-handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
+line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
+handler = WebhookHandler(os.environ.get("LINE_SECRET"))
 
 # 您的 System Prompt 保持不變（包含所有產品邊界、排查步驟與 2FA 規則）
 SYSTEM_PROMPT = """
